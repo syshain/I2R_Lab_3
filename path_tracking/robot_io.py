@@ -1,6 +1,6 @@
 """Thin wrapper around the xArm SDK for the Lite 6.
 
-Keeps every hardware call in one place so the phase logic in path_tracker.py
+Keeps every hardware call in one place so the phase logic in pick_and_place.py
 never touches the SDK directly. All angles are returned as (6,) numpy arrays
 in RADIANS; all cartesian positions as (6,) vectors [x, y, z, roll, pitch, yaw]
 with position in MM and rpy in DEGREES (the SDK's native units).
@@ -8,7 +8,6 @@ with position in MM and rpy in DEGREES (the SDK's native units).
 
 import time
 
-from cv2.cuda import Event_BLOCKING_SYNC
 import numpy as np
 
 from ik_solver import LITE6_JOINT_LIMITS_DEG
@@ -29,7 +28,9 @@ def connect_arm(ip=ROBOT_IP):
 
     arm = XArmAPI(ip)
     try:
-        arm.reset()
+        # NOTE: no arm.reset() here — it drives the arm home on every connect,
+        # which wipes out whatever pose you left it in between runs. We only
+        # clear faults and enable motion so the arm stays exactly where it is.
         arm.clean_error()
         arm.motion_enable(enable=True)
         arm.set_mode(POSITION_MODE)
@@ -47,14 +48,6 @@ def read_joints_rad(arm):
     code, res = arm.get_servo_angle(is_radian=True)
     if code != 0:
         raise RuntimeError("Failed to read joint angles (code %d)" % code)
-    return np.asarray(res[:6], dtype=float)
-
-
-def read_pose_mm_deg(arm):
-    """Current flange pose as a (6,) vector [x,y,z mm; roll,pitch,yaw deg]."""
-    code, res = arm.get_position(is_radian=False)
-    if code != 0:
-        raise RuntimeError("Failed to read pose (code %d)" % code)
     return np.asarray(res[:6], dtype=float)
 
 
@@ -87,20 +80,6 @@ def move_to_joints(arm, q_target_rad, speed=SERVO_SPEED, wait=True):
         return False, 'servo command error: %s' % e
 
 
-def wait_for_idle(arm, timeout_s=120.0, poll_s=0.1):
-    """Block until the controller reports no active movement."""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        try:
-            moving = arm.is_moving()
-        except Exception:
-            return False
-        if not moving:
-            return True
-        time.sleep(poll_s)
-    return False
-
-
 HOME_JOINTS_DEG = [0, 0, 20, 0, 0, 0]
 
 def go_home(arm):
@@ -108,26 +87,45 @@ def go_home(arm):
     return move_to_joints(arm, np.deg2rad(HOME_JOINTS_DEG))
 
 
-def open_gripper(arm):
+def open_bio_gripper(arm):
+    """Open (release) the Lite6 vacuum gripper. Returns 1 on success, 0 otherwise.
+
+    Uses arm.open_lite6_gripper(); the SDK returns a code where 0 == success, so we
+    surface that rather than assuming success just because no exception was raised.
     """
-    Open the gripper if not opened
-    """
-    opened = 0
     try:
         code = arm.open_lite6_gripper()
-        opened += 1
+        if code != 0:
+            print("WARN: open_lite6_gripper returned code %s" % code)
+            return 0
+        return 1
     except Exception as e:
-        print("ERROR: Could not open gripper")
-    return opened
+        print("ERROR: Could not open bio gripper:", e)
+        return 0
 
-def close_gripper(arm):
+
+def close_bio_gripper(arm):
+    """Close (engage suction) the Lite6 vacuum gripper. Returns 1 on success, 0 otherwise.
+
+    Uses arm.close_lite6_gripper(); the SDK returns a code where 0 == success.
     """
-    Close the gripper if not opened
-    """
-    closed = 0
     try:
         code = arm.close_lite6_gripper()
-        closed += 1
+        print(code)
+        if code != 0:
+            print("WARN: close_lite6_gripper returned code %s" % code)
+            return 0
+        return 1
     except Exception as e:
-        print("ERROR: Could not close gripper")
-    return closed
+        print("ERROR: Could not close bio gripper:", e)
+        return 0
+
+
+def stop_bio_gripper(arm):
+    """Stop the bio/vacuum gripper pump/motor. Best-effort; returns True unless it raises."""
+    try:
+        arm.stop_lite6_gripper()
+        return True
+    except Exception as e:
+        print("WARNING: could not stop bio gripper (%s)." % e)
+        return False

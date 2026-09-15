@@ -1,10 +1,10 @@
-# LAB 3 — Monocular Vision-Guided Navigation
+# LAB 3 — Vision-Guided Pick & Place of Two Coloured Blocks
 
 **Module:** Robotics for Mechanical Engineers (Undergraduate / MSc)
-**Robot Platform:** UFACTORY Lite 6 (6-DOF articulated arm, wrist-mounted camera)
-**Prerequisites:** Lab 1 (Forward Kinematics), Lab 2 (IK & Calibration)
+**Robot Platform:** UFACTORY Lite 6 (6-DOF articulated arm, wrist-mounted camera, vacuum gripper)
+**Prerequisites:** Lab 1 (Forward Kinematics, Camera & Hand-Eye Calibration), Lab 2 (Inverse Kinematics & Trajectory Planning)
 **Duration:** 3 hours
-**Software:** Python 3.12+, OpenCV, NumPy, SciPy, xArm Python SDK
+**Software:** Python 3.12+, OpenCV 4.x, NumPy, SciPy, xArm Python SDK
 
 ---
 
@@ -12,25 +12,54 @@
 
 By the end of this lab you will be able to:
 
-1. Detect known objects in monocular images using colour-space segmentation and contour analysis.
-2. Infer depth from a single image when object physical dimensions are known, using the pinhole camera model.
-3. Drive a robot interactively from live visual feedback, converting an image-plane error into a base-frame motion command.
-4. Solve inverse kinematics for a desired end-effector pose (reusing the Lab 2 method) and command the servos safely through the xArm SDK.
-5. Integrate calibrated DH parameters and hand-eye transform (from Lab 2) into a vision-guided task.
+1. Segment a known object in a live monocular image using **HSV colour thresholding**, and tune the thresholds interactively against real lighting.
+2. Infer depth from a single image when the object's physical size is known, using the pinhole camera model.
+3. Convert an image-plane error into a base-frame motion command, and drive a robot **iteratively from live visual feedback** (eye-in-hand servoing).
+4. Solve inverse kinematics locally in Python (reusing the Lab 2 method) and command the servos safely through the xArm SDK.
+5. Integrate calibrated DH parameters and the hand-eye transform (from Lab 1) into a multi-stage, human-supervised pick-and-place task that includes a **vacuum gripper**.
+6. Read and extend a **modularised** control stack — recognising which module owns detection, planning, display, and hardware, and why those boundaries are drawn where they are.
+
+The central idea of the lab is that a wrist-mounted camera sees the block *through* the geometry between the camera, the flange, and the suction cup. Getting the cup onto the block therefore requires reasoning about **three linked frames at once** — not just "move toward where the pixel is."
+
+---
+
+## Code Architecture
+
+Following the convention established in Labs 1–2, the active code lives in `Lab_3/path_tracking/` as a flat directory of single-responsibility modules with descriptive docstrings and plain sibling imports. Each file owns exactly one concern; the entry point (`pick_and_place.py`) is a thin orchestrator that sequences them but owns no geometry or hardware detail of its own.
+
+| Module | Responsibility | Key contents |
+|--------|----------------|--------------|
+| `constants.py` | Every tunable knob + HSV defaults | `BLOCK_SIDE_MM`, `TOOL_OFFSET_MM`, `DOWN_RPY_DEG`, phase tolerances/steps, safety-taper limits, `COLOR_THRESHOLDS` (live-mutable HSV bands) |
+| `vision.py` | Colour detection → base-frame point | `_hsv_color_mask`, `_best_blob`, `detect_color_block`, `unproject_to_base`, `compute_detection` |
+| `motion.py` | Geometry planners + robot-facing moves | `flange_pose_base`, `plan_centre_step`, `plan_descent_step`, `cup_shift_flange`, `cup_axis_base`, `compute_topface_target`, `move_to_pose`, `nudge_z`, `nudge_xy`, `orient_downward`, `shift_cup_over_block`, `descend_along_cup_axis` |
+| `ui_display.py` | Camera, OpenCV UI, calibration loaders, key input | `load_camera_intrinsics`, `load_calibration_results`, `open_camera`, `size_windows`, `show_frame`, `wait_next`, `tune_masks`, trackbar helpers |
+| `fk_functions.py` | Forward kinematics (shared from Lab 1) | `fk_from_zeta(q, zeta)` |
+| `ik_solver.py` | Numerical inverse kinematics (port of Lab 2) | `solve_ik(T_target, q0, zeta)`, `pose_to_matrix`, joint limits |
+| `robot_io.py` | Thin xArm SDK wrapper (all hardware calls) | `connect_arm`, `read_joints_rad`, `move_to_joints`, `go_home`, `open_bio_gripper`, `close_bio_gripper`, `stop_bio_gripper` |
+| `pick_and_place.py` | **Orchestrator only** — interactive phase loops + top-level `run()` | `vertical_nudges`, `fine_position`, `approach_and_pick`, `safe_hold`, `run` |
+
+Two design rules worth internalising before you touch anything:
+
+- **Internal maths runs in metres + radians; the SDK speaks millimetres + degrees.** The unit conversion happens once, inside `robot_io.py`. Everything upstream of it works in SI.
+- **No cycles.** `pick_and_place` imports from `motion`, `vision`, and `ui_display`; those three import from `constants` (and `vision`); none of them import back up to the orchestrator. You can read any leaf module in isolation without loading the whole program.
+
+To run: `cd Lab_3/path_tracking && python3 pick_and_place.py`
 
 ---
 
 ## Problem Statement
 
-The robot's end-effector carries both a camera and a gripper (the gripper is not needed for this task). On the work surface sit two cubical blocks, each with side length **s = 50 mm**. Both are 3D-printed, so neither is pure white nor pure black; one prints in a light colour and the other in a dark colour. We call them the **light block** and the **dark block**.
+The robot's end-effector carries both a wrist camera and a **vacuum gripper** (a flat suction cup). On the work surface sit two wooden cubes, each with side length **s = 25 mm**: one **red**, one **green**. Wooden blocks are used deliberately — they give the vacuum cup a sealed surface to grip and present a matte, low-reflection face that segments cleanly.
 
-Your task has two phases:
+Your task has two stages:
 
-**Phase 1 — Manual positioning:** You position the arm by hand (teach/jog mode) so that *both* blocks are visible in the wrist-camera view. There is no automatic scanning — placing the blocks in view is your job, which keeps the number of moving parts small and puts a human in the safety loop before any autonomous motion begins.
+**Stage 1 — Pick the red block.** Locate it by colour, approach it with a five-phase vision-guided manoeuvre, engage the vacuum, confirm the grip, and lift back to a safe overview pose.
 
-**Phase 2 — Interactive navigation:** From the keyboard, step the end-effector a fixed amount at a time toward the **light** block, guided entirely by real-time monocular vision. Each keypress computes where the light block is in the image, converts that into a physical displacement, solves IK for the new end-effector pose, and commands the servos. The **dark** block is detected and shown as an operator warning but does not steer the path automatically. Stop once the end-effector is within a contact distance of the light block.
+**Stage 2 — Track & place the green block.** From that overview pose, run the *same* five-phase navigation on the green block, then set it down in place and retract.
 
-**The Challenge:** A monocular camera provides only 2D pixel coordinates. Depth is lost. However, because the cube side length is known (50 mm), you can recover approximate depth from the apparent size of the cube in the image using the pinhole camera model. This is the core insight of the lab.
+Every stage is **keygated**: the live camera feed is shown the whole time and the arm only advances when you press a key. A human stays in the safety loop for every autonomous motion. Press **[q]** at any point to abort — the script releases the suction and holds position so you can recover by hand.
+
+**The Challenge:** A monocular camera gives you only 2D pixels, but the cup must land on a specific 3D point on the table. Worse, the camera and the cup are physically separated — the optical axis does *not* pass through the suction pad. You must use the calibrated hand-eye transform to translate "the block is here in the image" into "the cup is here in space," accounting for that offset explicitly.
 
 ---
 
@@ -42,249 +71,202 @@ A calibrated pinhole camera projects a 3D point **P** = [X, Y, Z]ᵀ in the came
 
 $$u = f_x \frac{X}{Z} + c_x, \quad v = f_y \frac{Y}{Z} + c_y$$
 
-where fx, fy are the focal lengths in pixels and (cx, cy) is the principal point. These five parameters form the camera intrinsic matrix K, which you calibrated in Lab 2:
+where $f_x, f_y$ are the focal lengths in pixels and $(c_x, c_y)$ is the principal point. These form the intrinsic matrix $\mathbf{K}$ you calibrated in Lab 2:
 
 $$\mathbf{K} = \begin{bmatrix} f_x & 0 & c_x \\ 0 & f_y & c_y \\ 0 & 0 & 1 \end{bmatrix}$$
 
 ### Recovering Depth from Known Size
 
-If an object of known physical width S (in metres) subtends w pixels in the image, and the object face is approximately perpendicular to the optical axis, then:
+If an object of known physical width $S$ (metres) subtends $w$ pixels in the image, and its face is approximately perpendicular to the optical axis, then by similar triangles:
 
 $$Z \approx \frac{f_x \cdot S}{w}$$
 
-This follows directly from similar triangles in the pinhole model. The approximation degrades when the object is tilted relative to the camera (perspective foreshortening makes it appear narrower, overestimating depth), but it is sufficient for coarse navigation.
+This is exactly what `detect_color_block()` computes: it takes the larger bounding-box dimension as $w$ and plugs in `BLOCK_SIDE_MM`. The approximation degrades when the cube is tilted relative to the camera (foreshortening makes it look narrower, so depth is **over**-estimated) — which is why the code applies a correction bias later.
 
-**Task A1:** Given your camera intrinsics (fx ≈ 1649 px) and a 50 mm cube, calculate the expected pixel width of the cube at distances of 300 mm, 500 mm, and 800 mm. At what distance does the cube become too small to detect reliably (say, fewer than 20 pixels wide)?
+**Task A1:** Using your intrinsics (`fx ≈ fy`, read them from `Calibration/camera_matrix.npy`) and a **25 mm** cube, calculate the expected pixel width of the cube at distances of 150 mm, 250 mm, and 400 mm. At what distance does the cube drop below the detector's minimum reliable size? (Compare with `MIN_AREA_PX = 300` and the aspect-ratio guard in `_best_blob`.)
 
-**Task A2:** Derive the depth uncertainty σz as a function of pixel measurement uncertainty σw. If σw ≈ 2 pixels (one-pixel edge localization error on each side), what is σz at Z = 500 mm? Express your answer in millimetres. Hint: propagate through z = f·S/w using the chain rule.
+**Task A2:** Derive the depth uncertainty $\sigma_z$ as a function of pixel-measurement uncertainty $\sigma_w$. If $\sigma_w \approx 2$ px (one-pixel edge error on each side), what is $\sigma_z$ at $Z = 250$ mm? Propagate through $z = f \cdot S / w$ with the chain rule. Express your answer in millimetres.
 
 ---
 
-## Part B — Cube Detection Pipeline
+## Part B — Colour Detection Pipeline (HSV Segmentation)
 
-### Why not just look for "white" and "black"?
+### Why HSV, not RGB?
 
-Because the blocks are 3D-printed, their surface colours are muted and shift with the room lighting — the "light" block may read as off-white or pale grey, the "dark" one as charcoal rather than pure black. A fixed HSV rule like *low saturation AND high value* assumes a specific colour and breaks the moment the print filament or the lamp changes. So instead of hunting for two named colours, we work on the **grayscale luminance** channel and simply pick out the two extremes that are present:
+A raw BGR channel box ("is R high and G,B low?") couples hue to brightness: the same red cube reads differently under warm vs. cool room light because its value channel shifts. **Hue–Saturation–Value** separates the *colour* (hue) from how much colour there is (saturation) from how bright it is (value), so a band chosen on hue survives lighting changes far better than a fixed RGB rectangle.
 
-- The **light block** is the brightest compact, roughly-square region in view.
-- The **dark block** is the darkest such region.
+Two details make this pipeline robust:
 
-This sidesteps the classic failure of a single global threshold. If you draw one dividing line between "block" and "background", it can only separate *one* block from the table at a time; whenever the table's brightness happens to fall *between* the two blocks, one of them gets absorbed into the background and vanishes. Selecting the intensity extremes independently avoids that — the light block wins the "brightest" contest and the dark block wins the "darkest" contest regardless of what the background measures as.
+- **Red wraps around the hue wheel.** In OpenCV, hue is quantised to `[0, 179]`. Red sits at *both* ends of that range (near 0 and near 179), so a single contiguous band cannot capture it. The code therefore defines **two** red bands — `H[0,10]` and `H[160,179]` — and unions them. Green is a single mid-hue band `H[40,85]`.
+- **Live-tunable trackbars.** Because no default perfectly matches your filament + lamps, the program opens two mask windows with sliders for every bound before any motion happens. Dragging a slider mutates the shared `COLOR_THRESHOLDS` dict, so the very next frame re-masks with the new values.
 
 ### Code Overview
 
-The detection pipeline is implemented in `python_cube_nav/cube_detector.py`:
+Detection lives in `path_tracking/vision.py`; the interactive tuning UI lives in `path_tracking/ui_display.py`:
+
+**`vision.py` — segmentation & base-frame resolution:**
 
 | Function | Purpose |
 |----------|---------|
-| `detect_cubes(frame, K, dist)` | Main entry: undistorts the frame, finds the light and dark candidates, deduplicates, returns up to two detections |
-| `_candidate_regions(gray)` | Sweeps a set of grayscale thresholds to enumerate every distinct intensity region (a solid block has no internal edge, so we must binarise before contourcing), recording each region's mean luminance |
-| `_find_extreme_block(gray, K, want, label)` | Picks the single brightest (`want='bright'`) or darkest (`want='dark')` valid region among the candidates |
-| `_estimate_depth_from_size(w_px, h_px, fx)` | Applies Z = f·S/w to estimate camera-to-cube distance |
-| `_compute_confidence(contour, bbox)` | Heuristic score based on fill ratio and circularity |
-| `_dedupe_same_object(light_det, dark_det)` | If the brightest and darkest winners overlap heavily they are the same physical block seen twice — keep the stronger |
+| `detect_color_block(frame, color, K, dist)` | Undistorts, masks by colour, finds the best blob, estimates depth. Returns a dict or `{'mask': ...}` if nothing found. |
+| `_hsv_color_mask(frame_bgr, color)` | Converts BGR→HSV once, then ORs together every band in `COLOR_THRESHOLDS[color]`. This is where red's two wraparound bands get unioned. |
+| `_best_blob(mask)` | Picks the single best contour. Guards: area within `[MIN_AREA_PX, MAX_AREA_FRAC·img_area]`, aspect ratio within `[0.3, 3.0]`, confidence ≥ `MIN_CONFIDENCE`. |
+| `unproject_to_base(u, v, depth_m, K, T_cam)` | Unprojects a pixel at a given depth into a BASE-frame 3-D point (metres). |
+| `compute_detection(frame, color, K, dist, T_flange, T_ee_cam)` | **Single source of truth** for every downstream consumer: detects the block *and* resolves it into the base frame (`p_block_base`, `dist_flange_mm`, `xy_gap_mm`). Display, approach, and descent all consume this so they agree on the same numbers. |
 
-Two guards keep it sane: blobs covering more than `MAX_AREA_FRAC` (= 0.5) of the frame are ignored (that is the table/background, not a block), and each class keeps only its single best candidate, so exactly one light and one dark block are reported.
+**`ui_display.py` — live threshold tuning (no robot involved):**
 
-Each detection is returned as a dictionary containing:
-- `colour`: 'light' or 'dark'
-- `center_px`: (u, v) pixel centroid
-- `bbox_px`: (x, y, w, h) bounding box
-- `depth_m`: estimated distance in metres
+| Function | Purpose |
+|----------|---------|
+| `tune_masks(cap, K, dist)` | Interactive calibration step. Runs its own tight display loop showing the feed + both mask windows with their HSV bound-sliders; **[Enter]** accepts, **[r]** resets, **[q]** quits. |
+| `create_threshold_trackbars()` / `sync_threshold_trackbars()` / `read_threshold_trackbars()` / `reset_thresholds()` | Build, keep in sync, read, and restore the HSV sliders. Dragging one mutates the shared `COLOR_THRESHOLDS` dict immediately. |
+| `show_frame(...)` | Reads a frame, draws the overlay + detection box + optional extra marks (e.g. the projected cup tip), displays, returns the pressed key. |
+
+Each successful detection returns:
+- `center_px` : (u, v) centroid
+- `bbox_px`   : (x, y, w, h) bounding box
+- `depth_m`   : camera-to-block distance from known size (metres)
 - `confidence`: quality score [0, 1]
-- `mean_lum`: mean grayscale value inside the region
+- `mask`      : (H, W) uint8 debug mask
 
-### Task B1 — Run the Demo Mode
+**Confidence scoring:** a solid cube viewed head-on fills its bounding box almost completely, so `_best_blob` *rewards* high fill ratio (≥ 0.7 → full credit) rather than penalising it, and adds a circularity bonus for compact shapes. An earlier draft rejected the highest-fill blobs outright — the inversion is worth studying.
 
-Test the detection pipeline without hardware:
+**Task B1 — Tune the Masks (hands-on).** Run the program and stop at the TUNE MASKS step:
 
 ```bash
-cd Lab_3/python_cube_nav
-python run_lab3.py --demo
+cd Lab_3/path_tracking
+python3 pick_and_place.py
 ```
 
-This creates a synthetic 640×480 grey image with two painted rectangles (a light one and a dark one, simulating the printed blocks) and runs the full detector. Open the saved visualization at `Lab_3/Data/demo_detection.png` and verify:
-- Both blocks are detected and labelled 'light' / 'dark'
-- Depth estimates are reasonable (compare with your Task A1 calculations)
-- Confidence scores are above the 0.2 threshold
+Drag the sliders in the RED and GREEN windows until each highlights *only* its cube — no background bleed, no holes in the block. Record the final HSV bounds the console prints. Then:
 
-### Task B2 — Analyse Detection Robustness
+1. Why does red need **two** hue bands while green needs one? What would happen to red detection if you kept only the `H[0,10]` band?
+2. Which bound (H/S/V lo or hi) did you have to move most to reject the table/shadows? Explain what that bound is doing.
+3. What is the purpose of the `MAX_AREA_FRAC = 0.5` guard? What would the detector return if you removed it and pointed the camera at a mostly-uniform wall?
 
-Open `cube_detector.py` and examine the design choices:
+**Task B2 — Analyse the Blob Selection.** Read `_best_blob` and answer:
 
-1. **Extreme selection vs. global threshold:** `_find_extreme_block` picks the single brightest (or darkest) region rather than drawing one threshold between "block" and "background". Construct a mental picture where the table brightness lies *between* the two blocks. Explain why a single Otsu-style cut would lose one block in that case, while extreme selection keeps both.
-
-2. **Maximum-area guard:** Blobs covering more than `MAX_AREA_FRAC = 0.5` of the frame are discarded. What would happen to the detector if you removed this guard and pointed the camera at a mostly-uniform wall?
-
-3. **Why binarise before contourcing?** A solid block sitting on a flat background has no internal edge, so running `cv2.findContours` directly on the grayscale finds only the frame border. `_candidate_regions` sweeps a set of thresholds to create binary regions first. What would the detector return if you skipped that step and contoured the raw image?
-
-4. **Same-object deduplication:** `_dedupe_same_object` drops the weaker of the two winners if their bounding boxes overlap heavily (IoU > 0.3). Describe a lighting situation where the brightest and darkest candidates could actually be the *same* physical block (hint: a shaded corner versus a lit face), and why merging them matters.
-
-Write a short paragraph (3–4 sentences) summarising the trade-off between detection sensitivity (finding real blocks under varied lighting) and specificity (rejecting the table, shadows, and other clutter) in this pipeline.
+1. Why binarise (threshold) before `cv2.findContours`? A solid cube on a flat background has no internal edge — what would contouring the raw grayscale find instead?
+2. The aspect-ratio guard rejects blobs wider than 3× or taller than 3×. Give a realistic false-positive (e.g. a strip of coloured tape on the table) that this guard filters out.
+3. Write a short paragraph (3–4 sentences) on the trade-off between **sensitivity** (catching the real block under varied lighting) and **specificity** (rejecting the table, shadows, clutter) in this pipeline, and which knob trades off against which.
 
 ---
 
-## Part C — Manual Positioning & Interactive Control
+## Part C — Geometry: Three Linked Frames
 
-### Why no automatic scanning?
+This is the heart of the lab. The camera, the flange, and the suction cup do **not** share a common origin, and getting the cup onto the block means transforming across all three.
 
-Earlier drafts had the robot auto-sweep its base joint to search for the blocks. That adds several failure modes (cable strain, unattended motion, an extra control loop to debug) for little benefit in a teaching setting. Instead, **you** place the arm so both blocks are visible, and then drive the approach yourself one fixed step at a time. A human stays in the safety loop for every single motion.
+### The Coordinate Chain
 
-### Running the program
+All internal maths is in **metres + radians**; the SDK speaks **millimetres + degrees**. At any instant:
 
-```bash
-cd Lab_3/python_cube_nav
-python run_lab3.py
-```
+$$T_{flange} = FK(q,\ \zeta) \qquad (\text{base} \to \text{flange})$$
 
-On startup the program connects to the robot, enables motion, and opens the wrist-camera window (wrapped in a try/except, so a disconnected camera prints an error and exits cleanly instead of crashing). It then runs two phases:
+$$T_{cam} = T_{flange} \cdot T_{ee\_cam} \qquad (\text{base} \to \text{camera})$$
 
-**Phase 1 — Manual positioning.** Jog the arm with the teach pendant or the UFactory web interface (`http://<IP>:18333`) until both blocks are clearly in the camera view. When they are, click the window and press **`g`** to begin. Press **`q`** to cancel.
+where $\zeta$ is the nominal DH parameter set (from `fk_functions.fk_from_zeta`) and $T_{ee\_cam}$ is the joint-based hand-eye transform loaded by `ui_display.load_calibration_results()`. A detected pixel centre is unprojected out to its measured depth to give a 3-D point in the **base** frame (`vision.unproject_to_base`); every planned move is expressed against that base-frame point, so all commands live in the robot's own coordinates.
 
-**Phase 2 — Interactive navigation.** Drive the approach with the keyboard:
+### The Cup Offset (why "centre in frame" ≠ "cup over block")
+
+In the flange frame, the point where the camera's optical axis crosses the flange plane (the **view-axis footprint**) sits roughly **~57 mm off to one side**, whereas the suction-cup tip is at the flange origin projected down along flange Z. `motion.cup_shift_flange(T_ee_cam)` computes this as a pure **XY-only** translation — `footprint[:2] - tip[:2]` — deliberately leaving height untouched. That ~57 mm lateral separation is the crux of the task:
+
+- Servoing the **camera** onto the block keeps vision alive, but leaves the **cup** ~57 mm away in XY.
+- So the approach splits into "**lower the camera** onto the block" (Phases B/C) followed by a one-shot horizontal "**shift the cup**" (Phase D) computed directly from the hand-eye matrix.
+
+### Orientation: making the cup point straight down
+
+With the wrist flipped to `(roll, pitch, yaw) = (0°, 180°, 0°)` (`constants.DOWN_RPY_DEG`), the flange **+Z points down** toward the table and the pad hangs out the +Z side. This anti-parallel flip is what Phase A performs via `motion.orient_downward`. Note the consequence: **"down" for the cup is the flange +Z direction carried into the base frame** — *not* a hardcoded base −Z. The helper `motion.cup_axis_base(T_flange, T_ee_cam)` derives the true descent direction from the camera optical axis so it stays correct even if the wrist isn't perfectly level.
+
+**Task C1 — Trace the Transform.** Given a detection whose base-frame point is $p_{block}$ and the current $T_{flange}$, sketch (in words or equations) the sequence of transforms that yields the flange-frame XY offset between the view-axis footprint and the cup tip. Where in the code is this computed? (Look at `cup_shift_flange`.)
+
+**Task C2 — Why derive, don't hardcode.** Suppose the operator jogs the wrist slightly off-level during Phase A. Why does computing the descent direction from the optical axis (`cup_axis_base`) beat a fixed `[0, 0, -1]` base vector? What goes wrong with the fixed version?
+
+---
+
+## Part D — The Five-Phase Approach
+
+`pick_and_place.approach_and_pick(...)` runs these phases for whichever block is targeted. Each is keygated. The pure geometry/planning lives in `motion.py`; the interactive keystroke loops that call it live in `pick_and_place.py`.
+
+| Phase | Name | What it does | Keys |
+|-------|------|--------------|------|
+| **A** | Orient Down | Flip the wrist to `pitch 180°` so the cup faces the table. | `[Enter]` to execute |
+| **B** | Centre in Frame | Keystroke-driven **rotational** re-aiming that drives the block's pixel centroid to the principal point. No advance — pure aiming. Up to `LATERAL_STEPS` presses. | `[Enter]` per step; auto-exits when within `CENTRE_TOL_PX` |
+| **C** | Lower Camera | Each press issues **ONE fused IK-solved move** that re-aims *and* advances `DESCENT_STEP_MM` (15 mm) along the optical axis. Keeps the camera locked on the block (vision stays alive). | `[w]`/`[s]`/↑/↓ advance; `[Enter]` done; `[a]` abort |
+| **D** | Shift Cup Over Block | One-shot flange-frame **XY-only** translation (~57 mm, height unchanged) carrying the cup from the view-axis footprint onto the block. Also snapshots the top-face seat pose and the lift-back pose. | `[Enter]` to shift |
+| **E** | Fine Positioning | Hover-and-settle loop: creep the cup onto the top face, manage suction, confirm the grip. | see table below |
+
+### Why fuse aim + advance into one motion (Phase C)?
+
+An earlier design did "lateral move, then vertical move" as two separate solves. Between the two, the block drifted, so each solve corrected the other's error — producing visible **fishing/hunting**. Fusing aim and advance into a single target pose (`motion.plan_descent_step`) means there is only one motion to solve, so nothing fights itself and no inter-step error accumulates. This logic was ported from the proven white-block navigator in `python_cube_nav/navigator.py::plan_step`; Phase B uses its rotation-only sibling `motion.plan_centre_step`.
+
+### Phase E — Fine Positioning Controls
+
+Once the cup is hovering over the block, this interactive loop settles it onto the top face and manages the vacuum:
 
 | Key | Action |
 |-----|--------|
-| `w` | Take one fixed step (~10 mm) toward the light block |
-| `a` | Abort navigation (stop stepping) |
-| `r` | Reset the arm to home position |
-| `q` | Quit (goes home and disconnects) |
+| `[s]` / ↓ | Creep **down** `FINE_Z_STEP_MM` (3 mm, base Z) |
+| `[w]` / ↑ | Creep **up** `FINE_Z_STEP_MM` |
+| `[z]` / `[c]` | Creep **−X** / **+X** `FINE_XY_STEP_MM` (3 mm) |
+| `[a]` / `[d]` | Creep **−Y** / **+Y** `FINE_XY_STEP_MM` |
+| `[g]` | Drive to the frozen **top-face seat pose** `T_target` (position *and* orientation captured at the Phase D gate). Falls back to a live descent along the cup axis if no target was captured. |
+| `[o]` | **Engage** suction (close the vacuum cup onto the block) |
+| `[r]` | **Release** suction (open the cup) |
+| `[y]` | **Confirm** the grip — accepted only once suction is engaged; this is the phase exit |
+| `[x]` | Abort (note: `[a]` is taken by −Y here, so abort moved to `[x]`) |
 
-Each `w` press: detects the light block, computes a fixed-size displacement toward it, solves IK for the resulting end-effector pose, checks the joint limits, and commands the servos (blocking until the move finishes). If the light block drops out of view, the step is refused and the banner tells you to reposition. The loop also halts automatically once the light block is within the contact distance.
+The phase does **not** end on its own after engaging suction: you must press `[y]` to confirm the grip looks good. That prevents a weak or failed suction from being lifted straight away.
 
-### Task C1 — Understand the Interaction Model
+**Gripper control.** `[o]` and `[r]` drive the vacuum cup via the `robot_io.py` wrappers (`open_bio_gripper` / `close_bio_gripper`), which route to the SDK's `open_lite6_gripper` / `close_lite6_gripper` and surface the returned status code rather than assuming success. Treat `[o]` as "make the cup grasp" and `[r]` as "let go"; verify on your rig which physical state each produces before relying on it. (See the polarity warning under Task D3.)
 
-1. Why does putting a human in the loop for every step make this safer than a fully autonomous approach, even though it is slower? What can the operator catch that the software cannot?
+**Task D1 — Study the Fusion.** Read `motion.plan_centre_step` and `motion.plan_descent_step` side by side. They share an AIM block but differ only in the ADVANCE section. Explain, in terms of the residual the IK solver minimises, why issuing aim+advance as *one* target pose removes the fishing that the two-step version exhibited.
 
- 2. The program refuses to step when the light block is not detected. Why is "no detection → do nothing" a safer default than "no detection → keep going straight"?
+**Task D2 — The Seat Pose.** `motion.compute_topface_target` freezes a full flange pose (position + orientation) at the Phase D gate, and `[g]` drives straight to it. Why snapshot the pose *once* at that moment rather than re-estimating the contact height on every `[g]` press? What would re-estimating on each press risk introducing?
 
-3. What is the purpose of the `r` (reset to home) key, and why is it useful mid-task?
-
----
-
-## Part D — Vision-Guided Navigation
-
-### Approach Strategy
-
-For each `w` keypress, the navigator performs one closed-loop step toward the light block:
-
-1. **Detect** the light (and dark) block(s) in the current frame.
-2. **Centre** the light block by computing its lateral offset from the image principal point.
-3. **Convert** that pixel offset into a physical displacement using the current depth estimate and the camera intrinsics, and add a fixed forward component along the optical axis.
-4. **Rotate** the camera-frame displacement into the base frame using FK and the calibrated T_ee_cam.
-5. **Solve IK** for the new end-effector pose (orientation preserved) using the Python solver from `ik_solver.py` — the Lab 2 method.
-6. **Check joint limits**, then **command the servos** and wait for the move to complete.
-
-The dark block is drawn on screen as a warning but does not divert the path — avoiding it is the operator's call.
-
-### Inverse Kinematics — the same routine as Lab 2
-
-Inverse kinematics here is solved **in Python**, and it is a direct port of the very routine you implemented in Lab 2 (`MATLAB_IK/ik_solve.m` + `ik_objective.m`). Nothing about the method has changed — only the language. Concretely, `python_cube_nav/ik_solver.py` reuses three things you already met:
-
-| Piece | Lab 2 (where you saw it) | Lab 3 (`ik_solver.py`) |
-|-------|--------------------------|------------------------|
-| Error vector `[position; orientation]` | `ik_objective.m` | `ik_objective()` — identical formula |
-| Orientation error = axis-angle of `R_cur·R_tgtᵀ` | `ik_objective.m` (the `acos((trace−1)/2)` block) | `rotation_log_map()` — the *same* log map used in Lab 2's calibration (`so3.py`) |
-| Levenberg–Marquardt solve with joint limits | `ik_solve.m` → `lsqnonlin` | `solve_ik()` → `scipy.optimize.least_squares` (bounded LM) |
-
-So the connection is deliberate: **the inverse kinematics that drives the robot in Lab 3 is the one you derived and tested by hand in Lab 2.** If your Lab 2 MATLAB solver converged to a given target from a given initial guess, the Python solver will converge to the same solution branch from the same seed.
-
-The solver minimises the 6-vector residual `e(q) = [T(q)·p − p_target ; log(R(q)·R_targetᵀ)]` over the six joint angles, clamped to the UFACTORY Lite 6 limits, using Levenberg–Marquardt. It is seeded from the arm's current joint angles each step, so it stays on the same solution branch rather than jumping to a different elbow/wrist configuration.
-
-Two practical notes:
-
-- Because IK is solved locally, the program does **not** depend on the controller exposing an IK service. (The xArm SDK v1.17.3 does have `get_inverse_kinematics(pose) -> (code, angles)`, but there is no `wait_until_ready()` / `inverse_kinematics_command`; motion completion is always handled by `set_servo_angle(..., wait=True)`, which blocks until the move finishes.)
-- Setting `USE_CONTROLLER_IK = True` in `navigator.py` turns on a cross-check: after each Python-IK solution it also queries the controller's own IK and prints the maximum joint difference. A small number confirms your Python solver agrees with the hardware; a large number flags a sign/unit/convention mismatch worth investigating.
-
-### Coordinate Transform Chain
-
-At each step, the desired EE motion δp_camera (from image analysis) must be expressed in the base frame for IK:
-
-$$\delta\mathbf{p}_{base} = \mathbf{R}_{base}^{cam} \cdot \delta\mathbf{p}_{cam}$$
-
-where R_base^cam = FK(q) · T_ee_cam gives the camera orientation in the base frame. The target base-frame position is p_target = p_current + δp_base.
-
-### Task D1 — Study the Navigator and the IK Port
-
-Read `python_cube_nav/navigator.py` and `python_cube_nav/ik_solver.py` and answer:
-
-1. **Pixel-to-lateral conversion:** the lines computing `angle_x`, `angle_y`, `lateral_x`, `lateral_y`. Verify the formula lateral ≈ Z · tan(pixel_offset / focal_length). Why is `np.tan()` used instead of the small-angle approximation?
-
-2. **Fixed step size:** `APPROACH_STEP_MM = 10` caps how far the arm advances per keypress. Why is a bounded, operator-paced step safer than a velocity-controlled continuous approach?
-
-3. **Contact condition:** the loop stops when `depth_mm ≤ CONTACT_DISTANCE_MM + CUBE_SIDE_M * 1000`. Why is the cube side length added to the contact threshold?
-
-4. **The Lab 2 connection:** Open `ik_objective()` in `ik_solver.py` beside `MATLAB_IK/ik_objective.m` from Lab 2. Confirm they compute the same 6-vector error. Which line in each corresponds to the orientation error, and why is that term a log-map (axis-angle) rather than a subtraction of Euler angles?
-
-5. **Seeding and multiplicity:** `solve_ik` is called with the arm's *current* joint angles as the initial guess. Given what you learned about solution multiplicity in Lab 2 (Task A2), why does seeding from the current pose keep the arm on one solution branch instead of flipping to a different elbow/wrist configuration mid-approach?
-
-### Task D2 — Simulate One Step
-
-Without running on hardware, manually trace one navigation step for this scenario:
-- Light block 200 px right of the image centre, depth = 400 mm, fx = fy = 1649 px
-- End-effector currently at home, orientation unchanged
-
-Compute:
-- The lateral displacement (show your arithmetic)
-- The forward displacement (given APPROACH_STEP_MM = 10 mm)
-- The resulting target base-frame position (qualitatively: which way does it move?)
-
-### Task D3 — Live Navigation (Hardware Required)
-
-With both blocks placed on the work surface, run the full program and drive the approach to the light block:
+**Task D3 — Live Pick (hardware required).** With both blocks placed on a stable surface, run the full program and complete Stage 1 (pick the red block):
 
 ```bash
-python run_lab3.py
+cd Lab_3/path_tracking
+python3 pick_and_place.py
 ```
 
-Position the arm (Phase 1), then step toward the light block with `w` (Phase 2). Observe:
-- Does the light block stay centred as you step, or does it drift off-centre (indicating a hand-eye or sign error)?
-- How many steps did the approach take?
-- Did the dark block ever come close to the path? How did you respond?
-- What was the final depth reading at contact?
+Work through: TUNE MASKS → FREE MOVE (jog until both blocks are visible) → STAGE 0 → Phases A–E for the red block. Observe and record:
+- Does the block stay centred during Phase B, or drift off-centre (a sign of a hand-eye or sign error)?
+- How many Phase C advances did the descent take? Was there any visible hunting?
+- At the Phase D gate, what cup-offset (mm) did the console report? Does it match your Part C estimate of ~57 mm?
+- What was the flange Z at touchdown, and did `[g]` land the cup on the top face?
+- Did the vacuum hold on the first `[o]`, or did you need to re-seat with `[s]`?
 
-Examine the saved navigation log at `Lab_3/Data/navigation_log.npy`:
-
-```python
-import numpy as np
-log = np.load('Lab_3/Data/navigation_log.npy', allow_pickle=True).tolist()
-for entry in log[-5:]:
-    print(entry)
-```
+> **⚠ Verify gripper polarity on your rig before trusting `[o]`/`[r]`.** The `robot_io.py` wrappers document `open_bio_gripper` as *release* and `close_bio_gripper` as *engage*, and every other release site in the program (green set-down, `safe_hold`) uses `open_bio_gripper()` to let go. But inside `fine_position()`, `[o]` ("ENGAGE") currently calls `open_bio_gripper()` and `[r]` ("RELEASE") calls `close_bio_gripper()` — the reverse. Confirm which key actually makes the cup grasp; if it's inverted, the fix is a one-line swap of those two calls. Do not rely on `[y]` "confirming" a grip until you've watched the pad physically seat.
 
 ---
 
-## Part E — Error Analysis and Discussion
+## Part E — Multi-Block Sequencing & Safe Teardown
 
-### Sources of Navigation Error
+### Lifting back to an overview pose
 
-Monocular navigation accumulates errors from multiple sources:
+After confirming the red grip, the arm does **not** home blindly. During the free-move prelude and Stage 0, the orchestrator (`pick_and_place.py`) continuously remembers the last flange pose from which **both** blocks were simultaneously visible (`capture_both_blocks_pose` / `maybe_update_overview`). That pose becomes `T_liftback`: after picking, the arm drives back to it, so the remaining (green) block is still in view and findable by vision. If no such pose was ever captured, it falls back to raising `constants.LIFT_BACK_UP_MM` (80 mm) along the cup axis from the pre-shift hover.
 
-1. **Depth estimation error:** From Task A2, σz grows quadratically with distance. At 600 mm, a 2-pixel edge error translates to roughly ___ mm depth uncertainty.
+### Terminal behaviours
 
-2. **Perspective foreshortening:** As the robot approaches at an angle, the cube face tilts relative to the camera. The apparent width shrinks, causing the depth estimator to overestimate distance. The robot keeps approaching further than necessary.
+`approach_and_pick` takes a `terminal` argument:
 
-3. **Hand-eye calibration residual:** Even after Lab 2 calibration, T_ee_cam has finite error (~4 mm position, ~1° orientation). This propagates into every coordinate transform.
+- **`'lift'`** (default, red): after `[y]` confirm, drive to `T_liftback` and return holding the block.
+- **`'release'`** (green): after `[y]` confirm, set the block **down in place**, open the cup, then retract to `T_liftback`.
 
-4. **Detection jitter:** Frame-to-frame variation in centroid and bounding box due to lighting changes, compression artefacts, and motion blur.
+### Distance-based safety taper
 
-### Task E1 — Quantify Total Uncertainty
+`motion._approach_schedule(dist_mm)` scales **both** the commanded step length and the servo speed linearly with distance: far away → fast, big steps (`FAR_SPEED_PCT`, `ADVANCE_STEP_MAX_MM`); inside `constants.CLOSE_ZONE_MM` (60 mm) → creeping, tiny steps floored at `ADVANCE_STEP_MIN_MM` (1 mm). This keeps the final approach gentle without slowing the initial travel.
 
-Using your calibration results from Lab 2 and the depth uncertainty from Task A2, compute the total expected positioning uncertainty at the contact point. Combine:
-- Depth estimation σz at the average approach distance
-- Lateral estimation σlat (similar derivation to σz, using image-centre offset)
-- Hand-eye calibration residual (use the final spread from Stage 2)
+### Safe teardown
 
-Report the combined uncertainty as a 3D ellipsoid (σx, σy, σz).
+On completion the arm homes (`robot_io.go_home`). On **any** failure or abort, `pick_and_place.safe_hold` releases the suction and **holds position** (it does *not* home), so you can inspect and recover by hand without the arm sweeping somewhere unexpected. Aborting after a confirmed grip always releases suction first so a held block is never dragged.
 
-### Task E2 — Improvements
+**Task E1 — Why return to the overview pose?** Explain why lifting back to a remembered both-blocks-visible viewpoint is safer and more useful than either (a) a blind +Z clearance bump or (b) homing immediately. What does it guarantee for the second block?
 
-Propose three concrete improvements to this pipeline that would reduce navigation error. For each, explain:
-- What error source it addresses
-- Roughly how much improvement you expect (order of magnitude)
-- Implementation complexity (low/medium/high)
+**Task E2 — Failure injection.** Mentally walk through what happens if you press `[x]` (abort) in Phase E *after* engaging suction but *before* confirming. Trace the exact sequence of calls that ensures the block is not dragged. Which line releases the suction, and why does it run before the arm moves anywhere?
 
-Examples to consider: stereo camera, structured light, multi-view triangulation during approach, active pose adjustment to face the cube head-on before measuring depth, Kalman filtering of depth estimates across frames.
+**Task E3 — Improvements.** Propose two concrete improvements to this pipeline (e.g. force/torque sensing for touchdown instead of vision-only depth, a grasp-quality metric from suction pressure, automatic re-grasp on slip). For each, state which error source it addresses, the rough order-of-magnitude benefit, and implementation complexity.
 
 ---
 
@@ -292,13 +274,13 @@ Examples to consider: stereo camera, structured light, multi-view triangulation 
 
 Submit a report (PDF or Word) containing:
 
-1. **Title page** — Name, student number, date, lab partner(s).
-2. **Part A** — Answers to Tasks A1 and A2 with worked calculations.
-3. **Part B** — Detection robustness analysis (Task B2 paragraph). Include the demo visualization screenshot.
-4. **Part C** — Answers to the interaction-model questions (Task C1): why human-in-the-loop is safer, and why "no detection → do nothing" is the right default.
-5. **Part D** — Answers to Task D1 (including the Lab 2 IK-port comparison and the seeding/multiplicity question). Manual trace from Task D2. Live navigation results from Task D3: step count, final depth, trajectory quality assessment. Last 5 entries from the navigation log.
-6. **Part E** — Combined uncertainty calculation (Task E1). Three proposed improvements with justification (Task E2).
-7. **Synthesis** (½ page) — Compare monocular navigation (Lab 3) with the calibrated open-loop approach from Labs 1–2. When is vision guidance essential, and when is calibrated kinematics sufficient? What fundamental limitation of monocular vision persists even with perfect calibration?
+1. **Title page** — name, student number, date, lab partner(s).
+2. **Part A** — Tasks A1 and A2 with worked calculations (use your actual `fx`).
+3. **Part B** — Your tuned HSV bounds; answers to B1 (why red needs two bands, which bound mattered most, the max-area guard) and B2 (binarisation, aspect guard, sensitivity/specificity paragraph). Include a screenshot of the two mask windows at acceptance.
+4. **Part C** — Task C1 (transform trace to the cup offset) and C2 (why derive the descent direction).
+5. **Part D** — Task D1 (fusion vs. fishing), D2 (snapshot rationale), and D3 live results: Phase B centring behaviour, Phase C step count and any hunting, the reported Phase D offset vs. your ~57 mm estimate, touchdown Z, and whether the vacuum held first try.
+6. **Part E** — Tasks E1, E2, and E3.
+7. **Synthesis** (½ page) — Compare this eye-in-hand pick-and-place with the open-loop calibrated approach of Labs 1–2. When is closed-loop vision guidance essential, and when is calibrated kinematics alone sufficient? What fundamental limitation of monocular vision persists even with perfect calibration?
 
 ---
 
@@ -306,24 +288,38 @@ Submit a report (PDF or Word) containing:
 
 ```
 Lab_3/
-├── python_cube_nav/
-│   ├── run_lab3.py              # Main entry point (--demo or live), camera window + key loop
-│   ├── cube_detector.py         # Colour segmentation + depth inference
-│   ├── navigator.py             # Interactive single-step planner + servo helpers
-│   ├── ik_solver.py             # Python IK — port of Lab 2's MATLAB ik_solve/ik_objective
-│   └── fk_functions.py          # Forward kinematics (shared from Lab 2)
-├── Data/
-│   ├── demo_detection.png       # Generated by --demo mode
-│   └── navigation_log.npy       # Generated by live run
-└── lab3_instructions.md         # This file
+├── path_tracking/                 # ACTIVE entry point for this lab (flat siblings)
+│   ├── pick_and_place.py          # Orchestrator only: interactive phase loops + run()
+│   ├── constants.py               # Tunable knobs + HSV defaults (_clone_defaults)
+│   ├── vision.py                  # Colour detection → base-frame resolution
+│   ├── motion.py                  # Geometry planners + robot-facing move primitives
+│   ├── ui_display.py              # Camera / OpenCV UI / calibration loaders / keys
+│   ├── fk_functions.py            # Forward kinematics (shared from Lab 1)
+│   ├── ik_solver.py               # Numerical inverse kinematics (port of Lab 2)
+│   └── robot_io.py                # Thin xArm SDK wrapper (connect, move, gripper)
+├── python_cube_nav/               # REFERENCE ONLY — proven white-block navigator
+│   ├── run_lab3.py                #   the original monocular-nav demo
+│   ├── navigator.py               #   source of the fused plan_step (Phase C port)
+│   ├── cube_detector.py           #   luminance-extreme detector (prior approach)
+│   ├── ik_solver.py               #   duplicate of the above (kept for reference)
+│   └── fk_functions.py            #   duplicate of the above (kept for reference)
+├── Calibration/
+│   ├── camera_matrix.npy          # K (intrinsics)
+│   ├── dist_coeffs.npy            # distortion coefficients
+│   └── calibration_results.npy    # zeta_nominal + T_ee_cam_joint (hand-eye)
+└── lab3_instructions.md           # This file
+```
+
+To run: `cd Lab_3/path_tracking && python3 pick_and_place.py`
 
 ---
 
 ## Safety Notes
 
-- You jog the arm manually in Phase 1 — keep bystanders clear while doing so.
-- Every autonomous motion in Phase 2 is one small step at a time; keep your hand near the emergency stop and be ready to use it.
-- Use the `a` key to abort stepping at any moment, and `r` to return to home.
-- Ensure the blocks are placed on a stable, flat surface and cannot be knocked over by the robot.
-- The approach brings the EE close to the light block — stand ready to E-stop if collision risk appears.
-- Reduce `APPROACH_STEP_MM` in `navigator.py` to 5 mm if you want slower, safer approach motions.
+- You jog the arm manually during FREE MOVE — keep bystanders clear.
+- Every autonomous motion is one small, keygated step; keep your hand near the emergency stop.
+- Use the phase-abort key (`[a]`, or `[x]` inside Phase E) to stop stepping at any moment, and `[q]` to quit.
+- Ensure both blocks sit on a stable, flat surface and cannot be knocked over.
+- The approach brings the cup close to the block — stand ready to E-stop if collision risk appears.
+- On any failure the arm **holds position** (it does not home) so you can recover by hand; only a fully successful run homes automatically.
+- To slow the approach further, reduce `DESCENT_STEP_MM` and/or `FINE_Z_STEP_MM` in `constants.py`.
