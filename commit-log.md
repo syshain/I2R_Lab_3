@@ -23,3 +23,9 @@ Working lab 3 code
 - Colour thresholding moved to RGB with live sliders; QT trackbar crash fixed
 - Modularised to 12 flat src modules; one-line docstrings; dead code and stray prints removed; units consistent throughout (m + rad internally, SDK boundary in robot_io)
 - Added docs/STRUCTURE.md; py_compile clean across all 12 src modules; IK self-test converges to 0.0 mm
+
+# v4.1 - Added results files
+## 29 Oct 2026
+- Removed .npy and .npz ignore from .gitignore
+- Data files now exist in the committed repository
+
