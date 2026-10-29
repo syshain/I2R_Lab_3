@@ -25,7 +25,7 @@ The central idea of the lab is that a wrist-mounted camera sees the block *throu
 
 ## Code Architecture
 
-Following the convention established in Labs 1–2, the active code lives in `Lab_3/path_tracking/` as a flat directory of single-responsibility modules with descriptive docstrings and plain sibling imports. Each file owns exactly one concern; the entry point (`pick_and_place.py`) is a thin orchestrator that sequences them but owns no geometry or hardware detail of its own.
+Following the convention established in Labs 1–2, you work in `Lab_3/skeletons/`, a flat directory of single-responsibility modules with descriptive docstrings and plain sibling imports. Each file owns exactly one concern and arrives with its function bodies stubbed for you to implement; the entry point (`pick_and_place.py`) is a thin orchestrator that sequences them but owns no geometry or hardware detail of its own. The table below describes what each module is responsible for — the *signatures* are given, the *bodies* are yours to write.
 
 | Module | Responsibility | Key contents |
 |--------|----------------|--------------|
@@ -43,7 +43,7 @@ Two design rules worth internalising before you touch anything:
 - **Internal maths runs in metres + radians; the SDK speaks millimetres + degrees.** The unit conversion happens once, inside `robot_io.py`. Everything upstream of it works in SI.
 - **No cycles.** `pick_and_place` imports from `motion`, `vision`, and `ui_display`; those three import from `constants` (and `vision`); none of them import back up to the orchestrator. You can read any leaf module in isolation without loading the whole program.
 
-To run: `cd Lab_3/path_tracking && python3 pick_and_place.py`
+To run: `cd Lab_3/src && python3 pick_and_place.py`
 
 ---
 
@@ -83,7 +83,7 @@ $$Z \approx \frac{f_x \cdot S}{w}$$
 
 This is exactly what `detect_color_block()` computes: it takes the larger bounding-box dimension as $w$ and plugs in `BLOCK_SIDE_MM`. The approximation degrades when the cube is tilted relative to the camera (foreshortening makes it look narrower, so depth is **over**-estimated) — which is why the code applies a correction bias later.
 
-**Task A1:** Using your intrinsics (`fx ≈ fy`, read them from `Calibration/camera_matrix.npy`) and a **25 mm** cube, calculate the expected pixel width of the cube at distances of 150 mm, 250 mm, and 400 mm. At what distance does the cube drop below the detector's minimum reliable size? (Compare with `MIN_AREA_PX = 300` and the aspect-ratio guard in `_best_blob`.)
+**Task A1:** Using your intrinsics (`fx ≈ fy`, read them from `data/camera_matrix.npy`) and a **25 mm** cube, calculate the expected pixel width of the cube at distances of 150 mm, 250 mm, and 400 mm. At what distance does the cube drop below the detector's minimum reliable size? (Compare with `MIN_AREA_PX = 300` and the aspect-ratio guard in `_best_blob`.)
 
 **Task A2:** Derive the depth uncertainty $\sigma_z$ as a function of pixel-measurement uncertainty $\sigma_w$. If $\sigma_w \approx 2$ px (one-pixel edge error on each side), what is $\sigma_z$ at $Z = 250$ mm? Propagate through $z = f \cdot S / w$ with the chain rule. Express your answer in millimetres.
 
@@ -102,7 +102,7 @@ Two details make this pipeline robust:
 
 ### Code Overview
 
-Detection lives in `path_tracking/vision.py`; the interactive tuning UI lives in `path_tracking/ui_display.py`:
+Detection lives in `src/vision.py`; the interactive tuning UI lives in `src/ui_display.py`:
 
 **`vision.py` — segmentation & base-frame resolution:**
 
@@ -134,7 +134,7 @@ Each successful detection returns:
 **Task B1 — Tune the Masks (hands-on).** Run the program and stop at the TUNE MASKS step:
 
 ```bash
-cd Lab_3/path_tracking
+cd Lab_3/src
 python3 pick_and_place.py
 ```
 
@@ -197,7 +197,7 @@ With the wrist flipped to `(roll, pitch, yaw) = (0°, 180°, 0°)` (`constants.D
 
 ### Why fuse aim + advance into one motion (Phase C)?
 
-An earlier design did "lateral move, then vertical move" as two separate solves. Between the two, the block drifted, so each solve corrected the other's error — producing visible **fishing/hunting**. Fusing aim and advance into a single target pose (`motion.plan_descent_step`) means there is only one motion to solve, so nothing fights itself and no inter-step error accumulates. This logic was ported from the proven white-block navigator in `python_cube_nav/navigator.py::plan_step`; Phase B uses its rotation-only sibling `motion.plan_centre_step`.
+An earlier design did "lateral move, then vertical move" as two separate solves. Between the two, the block drifted, so each solve corrected the other's error — producing visible **fishing/hunting**. Fusing aim and advance into a single target pose (`motion.plan_descent_step`) means there is only one motion to solve, so nothing fights itself and no inter-step error accumulates. This logic was ported from the proven white-block navigator in `reference/python_cube_nav/navigator.py::plan_step`; Phase B uses its rotation-only sibling `motion.plan_centre_step`.
 
 ### Phase E — Fine Positioning Controls
 
@@ -226,7 +226,7 @@ The phase does **not** end on its own after engaging suction: you must press `[y
 **Task D3 — Live Pick (hardware required).** With both blocks placed on a stable surface, run the full program and complete Stage 1 (pick the red block):
 
 ```bash
-cd Lab_3/path_tracking
+cd Lab_3/src
 python3 pick_and_place.py
 ```
 
@@ -288,7 +288,7 @@ Submit a report (PDF or Word) containing:
 
 ```
 Lab_3/
-├── path_tracking/                 # ACTIVE entry point for this lab (flat siblings)
+├── src/                           # ACTIVE code for this lab (flat siblings)
 │   ├── pick_and_place.py          # Orchestrator only: interactive phase loops + run()
 │   ├── constants.py               # Tunable knobs + HSV defaults (_clone_defaults)
 │   ├── vision.py                  # Colour detection → base-frame resolution
@@ -297,20 +297,26 @@ Lab_3/
 │   ├── fk_functions.py            # Forward kinematics (shared from Lab 1)
 │   ├── ik_solver.py               # Numerical inverse kinematics (port of Lab 2)
 │   └── robot_io.py                # Thin xArm SDK wrapper (connect, move, gripper)
-├── python_cube_nav/               # REFERENCE ONLY — proven white-block navigator
-│   ├── run_lab3.py                #   the original monocular-nav demo
-│   ├── navigator.py               #   source of the fused plan_step (Phase C port)
-│   ├── cube_detector.py           #   luminance-extreme detector (prior approach)
-│   ├── ik_solver.py               #   duplicate of the above (kept for reference)
-│   └── fk_functions.py            #   duplicate of the above (kept for reference)
-├── Calibration/
-│   ├── camera_matrix.npy          # K (intrinsics)
-│   ├── dist_coeffs.npy            # distortion coefficients
-│   └── calibration_results.npy    # zeta_nominal + T_ee_cam_joint (hand-eye)
-└── lab3_instructions.md           # This file
+├── data/                          # Calibration artefacts (.npy) loaded by ui_display
+│   ├── camera_matrix.npy          #   K (intrinsics)
+│   ├── dist_coeffs.npy            #   distortion coefficients
+│   ├── calibration_results.npy    #   zeta_nominal + T_ee_cam_joint (hand-eye)
+│   └── board_config.json          #   ArUco board spec used during Lab 1 calibration
+├── skeletons/                     # Student starting point — same modules, bodies stubbed
+│   └── *.py                       #   each function raises NotImplementedError("TODO: …")
+├── reference/                     # REFERENCE ONLY — not imported by the active code
+│   └── python_cube_nav/           #   proven white-block navigator (source of Phase C port)
+│       ├── run_lab3.py            #     the original monocular-nav demo
+│       ├── navigator.py           #     source of the fused plan_step (Phase C port)
+│       ├── cube_detector.py       #     luminance-extreme detector (prior approach)
+│       ├── ik_solver.py           #     duplicate of src/ik_solver.py (kept for reference)
+│       └── fk_functions.py        #     duplicate of src/fk_functions.py (kept for reference)
+├── docs/
+│   └── lab3_instructions.md       # This file
+└── commit-log.md                  # Version history
 ```
 
-To run: `cd Lab_3/path_tracking && python3 pick_and_place.py`
+To run: `cd Lab_3/src && python3 pick_and_place.py`
 
 ---
 
