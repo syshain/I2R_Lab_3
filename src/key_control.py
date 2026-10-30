@@ -5,7 +5,8 @@ from lab_config import KEY_STEP_MM, KEY_SPEED_PCT, TABLE_Z_MM, HOVER_ABOVE_MM
 from motion import flange_pose_base, move_to_pose
 from vision import compute_detection, project_base_to_uv
 from ui_display import show_frame
-import robot_io
+from reporting import progress
+import robot
 KEY_DELTAS = {ord('w'): np.array([1.0, 0.0, 0.0]), ord('s'): np.array([-1.0, 0.0, 0.0]), ord('a'): np.array([0.0, 1.0, 0.0]), ord('d'): np.array([0.0, -1.0, 0.0]), ord('z'): np.array([0.0, 0.0, -1.0]), ord('c'): np.array([0.0, 0.0, 1.0])}
 LEGEND = '[w/s]=+/-X [a/d]=+/-Y [z]=down [c]=up [SPACE]=confirm [q]=abort'
 
@@ -69,9 +70,9 @@ def keygate_approach(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, R_flang
                                              speed=KEY_SPEED_PCT)
             if ok_mv:
                 try:
-                    q_rad = robot_io.read_joints_rad(arm)
+                    q_rad = robot.read_joints_rad(arm)
                 except Exception:
                     q_rad = q_new if q_new is not None else q_rad
             else:
-                print('  ! move rejected: %s' % msg)
+                progress('! move rejected: %s' % msg)
     return confirmed, aborted, q_rad

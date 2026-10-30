@@ -10,9 +10,11 @@ from lab_config import (AXES_LENGTH_MM, CAMERA_INDEX, CAMERA_MATRIX_NAME,
                         TOOL_OFFSET_MM, _clone_defaults, data_path)
 from motion import flange_pose_base
 from fk_lite6 import pose_from_xyz_rpy
+from units import transform_from_pose_mm_rad
+from reporting import progress
 from vision import rgb_color_mask, compute_detection, detect_color_block, \
     project_base_to_uv
-import robot_io
+import robot
 WINDOW = 'Lab 3 : Pick & Place'
 RED_MASK_WINDOW = 'Lab 3 : RED mask'
 GREEN_MASK_WINDOW = 'Lab 3 : GREEN mask'
@@ -196,8 +198,15 @@ def show_frame(cap, status_line, info_lines=None, det=None, color='red', hint=No
         c = (int(round(det['center_px'][0])), int(round(det['center_px'][1])))
         cv2.circle(disp, c, 4, (0, 255, 255), -1)
     if extra_marks:
+        h, w = disp.shape[:2]
         for u, v, label, bgr in extra_marks:
-            p = (int(round(u)), int(round(v)))
+            u, v = float(u), float(v)
+            if not (np.isfinite(u) and np.isfinite(v)):
+                continue        # a point on the camera plane projects to junk
+            # Clip before drawing: a mark near the camera plane projects far
+            # outside the frame, and an unclipped coordinate crashes drawMarker.
+            p = (int(round(np.clip(u, -1e4, w + 1e4))),
+                 int(round(np.clip(v, -1e4, h + 1e4))))
             cv2.drawMarker(disp, p, bgr, cv2.MARKER_CROSS, 14, 2)
             cv2.putText(disp, label, (p[0] + 8, p[1] - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, bgr, 1, cv2.LINE_AA)
@@ -216,12 +225,12 @@ def tune_masks(cap, K, dist_coeffs):
 
     size_windows()
     create_threshold_trackbars()
-    print('Mask tuning: drag the sliders until each mask isolates only its')
-    print('block. [Enter]=accept  [r]=reset defaults  [q]=quit')
+    progress('Mask tuning: drag the sliders until each mask isolates only its')
+    progress('block. [Enter]=accept  [r]=reset defaults  [q]=quit')
     while True:
         ok, frame = cap.read()
         if not ok:
-            print('  ! camera frame grab failed')
+            progress('! camera frame grab failed')
             return False
         read_threshold_trackbars()
         masks = _both_masks(frame, K, dist_coeffs)
@@ -274,6 +283,6 @@ def wait_next(status_line, cap, arm, zeta, K, dist, T_ee_cam, color, info_lines=
 
 def _read_joints_safe(arm):
     try:
-        return robot_io.read_joints_rad(arm)
+        return robot.read_joints_rad(arm)
     except Exception:
         return None

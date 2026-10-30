@@ -1,13 +1,18 @@
-"""Thin wrapper around the xArm SDK for the Lite 6."""
+"""The only module that touches the xArm SDK: connect, joints, servo moves,
+and the vacuum gripper wrappers.
 
-import os
+Vacuum gripper semantics, since the names read backwards: `open_gripper`
+ENGAGES suction (open = suck the block onto the cup), `close_gripper`
+RELEASES it, and `stop_gripper` is a best-effort pump stop.
+"""
+
 import time
 
 import numpy as np
 from xarm.wrapper import XArmAPI
 
-from ik_solver import LITE6_JOINT_LIMITS_DEG
-from lab_config import ROBOT_IP
+from lab_config import JOINT_LIMITS_DEG, ROBOT_IP
+from reporting import progress
 
 SERVO_SPEED = 30
 POSITION_MODE = 0
@@ -22,7 +27,7 @@ def connect_arm(ip=ROBOT_IP):
         raise RuntimeError('could not connect to %s' % ip)
     time.sleep(0.5)
     if arm.get_is_moving() or arm.get_state() == 1:
-        print('  warning: arm is in motion at connect - holding')
+        progress('warning: arm is in motion at connect - holding')
         arm.emergency_stop(30)
         time.sleep(1.0)
     return arm
@@ -39,8 +44,8 @@ def read_joints_rad(arm):
 def within_joint_limits(q_deg):
     """True if a (6,) degree vector is inside the Lite 6 joint limits."""
     q_deg = np.asarray(q_deg, dtype=float)
-    return bool(np.all(q_deg >= LITE6_JOINT_LIMITS_DEG[:, 0])
-                and np.all(q_deg <= LITE6_JOINT_LIMITS_DEG[:, 1]))
+    return bool(np.all(q_deg >= JOINT_LIMITS_DEG[:, 0])
+                and np.all(q_deg <= JOINT_LIMITS_DEG[:, 1]))
 
 
 def move_to_joints(arm, q_target_rad, speed=SERVO_SPEED, wait=True):
@@ -69,7 +74,7 @@ def open_gripper(arm):
     try:
         return 1 if arm.open_lite6_gripper() == 0 else 0
     except Exception as e:
-        print('  ! open_gripper: %s' % e)
+        progress('! open_gripper: %s' % e)
         return 0
 
 
@@ -78,7 +83,7 @@ def close_gripper(arm):
     try:
         return 1 if arm.close_lite6_gripper() == 0 else 0
     except Exception as e:
-        print('  ! close_gripper: %s' % e)
+        progress('! close_gripper: %s' % e)
         return 0
 
 
@@ -87,5 +92,5 @@ def stop_gripper(arm):
     try:
         return arm.stop_lite6_gripper()
     except Exception as e:
-        print('  ! stop_gripper: %s' % e)
+        progress('! stop_gripper: %s' % e)
         return False

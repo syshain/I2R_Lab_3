@@ -2,7 +2,8 @@
 
 import numpy as np
 
-from ik_solver import rotation_log_map
+from reporting import banner, field, progress
+from so3 import rotation_log_map
 
 
 def _blend_linear(s):
@@ -77,15 +78,18 @@ def path_report(poses):
 
 
 if __name__ == '__main__':
-    from ik_solver import pose_to_matrix
+    from ik_lite6 import pose_to_matrix
     T_start = pose_to_matrix([0.0, 0.0, 0.3], np.deg2rad([0, 180, 0]))
     T_via = pose_to_matrix([0.05, 0.1, 0.35], np.deg2rad([0, 180, 0]))
     T_end = pose_to_matrix([0.15, 0.05, 0.25], np.deg2rad([0, 180, 0]))
-    print('profile      total_mm  max_step_mm  (2 segments, 25 wp each)')
+    banner('VIA-POINT PLANNER PROFILE COMPARISON')
+    progress('2 segments, 25 waypoints each, same start/via/end poses.')
+    field('profile', '   total_mm  max_step_mm')
     for mode in ('linear', 'cubic', 'quintic'):
         poses = plan_via_path(T_start, [T_via], T_end, mode=mode, n_per_seg=25)
         total, mx = path_report(poses)
-        print('%-12s %9.2f %12.2f' % (mode, total, mx))
+        field(mode, '%9.2f %12.2f' % (total, mx))
     print()
-    print('linear has the shortest path but a velocity discontinuity at the')
-    print('via; cubic/quintic crowd waypoints near segment ends (smooth stops).')
+    progress('linear has the shortest path but a velocity discontinuity at')
+    progress('the via; cubic/quintic crowd waypoints near segment ends')
+    progress('(smooth stops).')

@@ -3,9 +3,17 @@
 import copy
 import os
 
+import numpy as np
+
 # Hardware (env-overridable, same mechanism as Labs 1-2)
 ROBOT_IP = os.environ.get('ROBOT_IP', '192.168.1.158')
 CAMERA_INDEX = int(os.environ.get('CAMERA_INDEX', '4'))   # wrist USB camera
+
+# Solver / joint box (Lite 6 mechanical limits, degrees; JOINT LIMITS in the
+# UFACTORY handbook). ik_lite6.py and robot.py both read these.
+JOINT_LIMITS_DEG = np.array([[-360.0, 360.0], [-150.0, 150.0], [-3.5, 300.0],
+                             [-360.0, 360.0], [-124.0, 124.0], [-360.0, 360.0]])
+IK_FD_EPS_RAD = 1e-5        # centred-difference step for the IK Jacobian, radians
 
 # Block geometry / workflow / detection
 BLOCK_SIDE_MM = 25.0

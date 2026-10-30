@@ -29,3 +29,11 @@ Working lab 3 code
 - Removed .npy and .npz ignore from .gitignore
 - Data files now exist in the committed repository
 
+# v5 - Align with Lab 2's codebase
+30 Oct 2026
+- Ported Lab 2's units.py, so3.py and reporting.py into Lab_3; renamed ik_solver.py -> ik_lite6.py and robot_io.py -> robot.py, and rewired every script onto them
+- ik_lite6.py runs on the calibrated zeta from calibration_results.npy (nominal only as fallback) and keeps the residual-based convergence rule; when the primary bounded LM run stalls along a joint-limit face, solve_ik restarts from a handful of standard postures (IK self-test converges to < 0.01 mm on all reachable cases, NOT CONVERGED on the unreachable one)
+- All scripts now print through the shared reporting grammar (banner/heading/field/progress)
+- docs/STRUCTURE.md and docs/lab3_instructions.md rewritten to the new module layout; scratch diagnostic files removed
+- py_compile and import checks clean across all src modules
+

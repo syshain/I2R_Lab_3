@@ -6,10 +6,11 @@ import json
 import numpy as np
 
 import aruco_artifact_detector
-import robot_io
+import robot
 from lab_config import (GRIPPER_CALIBRATION_NAME, TABLE_Z_MM, TOOL_OFFSET_MM,
                         data_path)
 from motion import flange_pose_base
+from reporting import banner, field, heading, progress
 from ui_display import (WINDOW, draw_artifact_axes, load_camera_intrinsics,
                         load_calibration_results, open_camera, show_frame)
 from vision import project_base_to_uv
@@ -86,8 +87,15 @@ def _show_frozen(frame, status_line, info_lines, hint, marks, axes=None):
     img = frame.copy()
     if axes is not None:
         draw_artifact_axes(img, *axes)
+    h, w = img.shape[:2]
     for u, v, lbl, colr in marks:
-        p = (int(round(float(u))), int(round(float(v))))
+        u, v = float(u), float(v)
+        if not (np.isfinite(u) and np.isfinite(v)):
+            continue        # a point on the camera plane projects to junk
+        # Clip before drawing: a mark near the camera plane projects far
+        # outside the frame, and an unclipped coordinate crashes drawMarker.
+        p = (int(round(np.clip(u, -1e4, w + 1e4))),
+             int(round(np.clip(v, -1e4, h + 1e4))))
         cv2.drawMarker(img, p, colr, cv2.MARKER_TILTED_CROSS, 18, 3)
         cv2.putText(img, lbl, (p[0] + 10, p[1] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, colr, 2)
@@ -114,9 +122,9 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
     frame_cap = None
     while True:
         try:
-            q_rad = robot_io.read_joints_rad(arm)
+            q_rad = robot.read_joints_rad(arm)
         except Exception as e:
-            print("  ! joint read failed: %s" % e)
+            progress("! joint read failed: %s" % e)
             return None
         ret, frame = cap.read()
         det = detector.detect(frame) if ret else None
@@ -140,7 +148,7 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
 
         if key == KEY_CAPTURE:
             if det is None:
-                print("  ! nothing to capture: artifact not detected")
+                progress("! nothing to capture: artifact not detected")
                 continue
             capture = (q_rad, det['T_C_W'])
             frame_cap = frame.copy()
@@ -150,15 +158,15 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
                           'T_0_A': T_0_A.tolist(),
                           'marker_ids': det['ids'],
                           'reproj_px': float(det['reproj_px'])})
-            print("  captured: T_0_A position [mm] = %s"
+            field("captured", "T_0_A position [mm] = %s"
                   % np.array2string(T_0_A[:3, 3] * 1000.0, precision=1))
         elif key == ord('r'):
             T_0_A = capture = frame_cap = None
-            print("  capture cleared - press [SPACE] to retake.")
+            progress("capture cleared - press [SPACE] to retake.")
             continue
         elif key == KEY_SAVE:
             if T_0_A is None:
-                print("  ! nothing captured yet - press [SPACE] first.")
+                progress("! nothing captured yet - press [SPACE] first.")
                 continue
         elif key == ord('q'):
             return None
@@ -201,10 +209,10 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
                 frozen_info, "[SPACE]=accept   [r]=retake   [q]=abort", marks,
                 axes=axes_cap)
             if k in (KEY_CAPTURE, KEY_SAVE):
-                print("  artifact pose accepted.")
+                progress("artifact pose accepted.")
                 return T_0_A, capture
             if k == ord('r'):
-                print("  capture cleared - press [SPACE] to retake.")
+                progress("capture cleared - press [SPACE] to retake.")
                 T_0_A = capture = frame_cap = None
                 break
             if k == ord('q'):
@@ -233,9 +241,9 @@ def capture_touch(arm, zeta, T_0_A, p_top_A, n, p_face):
     touches = []
     while True:
         try:
-            q_rad = robot_io.read_joints_rad(arm)
+            q_rad = robot.read_joints_rad(arm)
         except Exception as e:
-            print("  ! joint read failed: %s" % e)
+            progress("! joint read failed: %s" % e)
             return None
 
         T_0_6 = flange_pose_base(q_rad, zeta)
@@ -268,28 +276,27 @@ def capture_touch(arm, zeta, T_0_A, p_top_A, n, p_face):
                 'graze': abs(n_z) < GRAZE_COS,
             }
             touches.append(touch)
-            msg = ("  touch %d: d = %+.2f mm   tilt = %.1f deg   contact %.1f mm "
-                   "from the face centre"
-                   % (len(touches), touch['d_mm'], tilt, touch['inplane_mm']))
+            field("touch %d" % len(touches),
+                  "d = %+.2f mm   tilt = %.1f deg   contact %.1f mm from the face centre"
+                  % (touch['d_mm'], tilt, touch['inplane_mm']))
             if touch['graze']:
-                msg += ("\n    WARNING: nearly parallel to the face - this touch's"
-                        " d is unreliable, consider [r]")
-            print(msg)
+                progress("WARNING: nearly parallel to the face - this touch's d is"
+                         " unreliable, consider [r]")
         elif key == ord('r'):
             if touches:
                 touches.pop()
-                print("  last touch removed (%d left)." % len(touches))
+                progress("last touch removed (%d left)." % len(touches))
             else:
-                print("  nothing to remove.")
+                progress("nothing to remove.")
         elif key == ord('c'):
             touches = []
-            print("  all touches cleared.")
+            progress("all touches cleared.")
         elif key == KEY_SAVE:
             if len(touches) < MIN_TOUCHES:
-                print("  ! %d touches recorded, but at least %d are needed for "
-                      "the consistency check." % (len(touches), MIN_TOUCHES))
+                progress("! %d touches recorded, but at least %d are needed for "
+                         "the consistency check." % (len(touches), MIN_TOUCHES))
                 continue
-            print("  touches accepted.")
+            progress("touches accepted.")
             return touches
         elif key == ord('q'):
             return None
@@ -312,35 +319,35 @@ def report_and_save(T_0_A, touches, p_top_A, T_6_C, capture):
     best = min(touches, key=lambda t: t['inplane_mm'])
     T_G_A = np.linalg.inv(best['T_0_6'] @ T_6_G) @ T_0_A
 
-    print("\n" + "=" * 62)
-    print("GRIPPER CALIBRATION RESULT (multi-touch)")
-    print("=" * 62)
-    print("  touches used: %d" % len(touches))
-    print("  idx      d [mm]   tilt [deg]   contact-from-centre   flags")
+    print()
+    banner("GRIPPER CALIBRATION RESULT (multi-touch)")
+    field("touches used", "%d" % len(touches))
+    heading("per-touch touches")
     for k, t in enumerate(touches, 1):
         flags = "GRAZE (ill-conditioned)" if t['graze'] else ""
-        print("  %3d  %10.2f  %10.1f       %8.1f mm        %s"
-              % (k, t['d_mm'], t['tilt_deg'], t['inplane_mm'], flags))
-    print("  d mean / std / spread:  %.2f / %.2f / %.2f mm"
+        field("touch %d" % k,
+              "d %10.2f mm   tilt %6.1f deg   contact %8.1f mm   %s"
+              % (t['d_mm'], t['tilt_deg'], t['inplane_mm'], flags))
+    field("d stats", "mean %.2f / std %.2f / spread %.2f mm"
           % (d * 1000.0, d_std_mm, d_spread_mm))
-    print("  nominal TOOL_OFFSET_MM for reference: %.2f mm" % TOOL_OFFSET_MM)
+    field("nominal", "TOOL_OFFSET_MM %.2f mm for reference" % TOOL_OFFSET_MM)
     if abs(d * 1000.0 - TOOL_OFFSET_MM) > 20.0:
-        print("  WARNING: fitted d differs from the nominal %.1f mm by %.1f mm"
-              % (TOOL_OFFSET_MM, abs(d * 1000.0 - TOOL_OFFSET_MM)))
-        print("           the nominal is a rough tape measure, but a gap this")
-        print("           large usually means a bad CAPTURE 1 - retake it.")
+        progress("WARNING: fitted d differs from the nominal %.1f mm by %.1f mm"
+                 % (TOOL_OFFSET_MM, abs(d * 1000.0 - TOOL_OFFSET_MM)))
+        progress("         the nominal is a rough tape measure, but a gap this")
+        progress("         large usually means a bad CAPTURE 1 - retake it.")
     if d <= 0:
-        print("  WARNING: d is not positive - the tip should sit in FRONT of")
-        print("           the flange along +z. Check the touches and retake.")
+        progress("WARNING: d is not positive - the tip should sit in FRONT of")
+        progress("         the flange along +z. Check the touches and retake.")
     if d_std_mm > CONSISTENCY_WARN_MM:
-        print("  WARNING: per-touch d spread %.2f mm > %.2f mm - the touches"
-              % (d_std_mm, CONSISTENCY_WARN_MM))
-        print("           disagree. Check the GRAZE flags and retake outliers.")
-    print("  T_G_C translation [mm]: %s"
+        progress("WARNING: per-touch d spread %.2f mm > %.2f mm - the touches"
+                 % (d_std_mm, CONSISTENCY_WARN_MM))
+        progress("         disagree. Check the GRAZE flags and retake outliers.")
+    field("T_G_C", "translation [mm] %s"
           % np.array2string(T_G_C[:3, 3] * 1000.0, precision=1))
-    print("  T_G_A translation [mm]: %s   (artifact relative to the tool at the"
+    field("T_G_A", "translation [mm] %s   (artifact relative to the tool at the"
           % np.array2string(T_G_A[:3, 3] * 1000.0, precision=1))
-    print("                            touch closest to the face centre)")
+    progress("           touch closest to the face centre)")
 
     data = {
         'T_6_G': T_6_G,
@@ -360,29 +367,30 @@ def report_and_save(T_0_A, touches, p_top_A, T_6_C, capture):
         'top_marker_id': TOP_MARKER_ID,
     }
     np.save(OUT_FILE, data, allow_pickle=True)
-    print("Saved:", OUT_FILE)
-    print("Record the per-touch d values, their spread, and T_G_A in your lab book.")
+    field("saved", OUT_FILE)
+    progress("Record the per-touch d values, their spread, and T_G_A in your lab book.")
 
 
 def main():
-    print("=" * 62)
-    print("STAGE 1 - GRIPPER CALIBRATION (one camera capture + several touches)")
-    print("=" * 62)
-    print("CAPTURE 1: hold the artifact still and let the camera look at it once.")
-    print("           [SPACE] captures and FREEZES the frame so you can check the")
-    print("           pose and the marked touch point before accepting it; the")
-    print("           live feed is only needed again for a retake.")
-    print("CAPTURE 2: move the arm BY HAND and touch the artifact's TOP face (the")
-    print("           flat face carrying marker %d) with the cup tip SEVERAL times," % TOP_MARKER_ID)
-    print("           at least %d and about 6 is a good number. Any point on the" % MIN_TOUCHES)
-    print("           face and any wrist tilt are fine - the touches do not have to")
-    print("           be at the centre and need not be vertical. The camera feed is")
-    print("           dropped for this stage: the artifact need not be in view,")
-    print("           nothing is detected and only a status panel is shown.")
-    print("           [SPACE] records each touch, [r] removes the last one, [c]")
-    print("           clears all, [ESC] saves and exits once %d touches agree.\n" % MIN_TOUCHES)
+    banner("STAGE 1 - GRIPPER CALIBRATION (one camera capture + several touches)")
+    progress("CAPTURE 1: hold the artifact still and let the camera look at it once.")
+    progress("           [SPACE] captures and FREEZES the frame so you can check the")
+    progress("           pose and the marked touch point before accepting it; the")
+    progress("           live feed is only needed again for a retake.")
+    progress("CAPTURE 2: move the arm BY HAND and touch the artifact's TOP face (the")
+    progress("           flat face carrying marker %d) with the cup tip SEVERAL times,"
+             % TOP_MARKER_ID)
+    progress("           at least %d and about 6 is a good number. Any point on the"
+             % MIN_TOUCHES)
+    progress("           face and any wrist tilt are fine - the touches do not have to")
+    progress("           be at the centre and need not be vertical. The camera feed is")
+    progress("           dropped for this stage: the artifact need not be in view,")
+    progress("           nothing is detected and only a status panel is shown.")
+    progress("           [SPACE] records each touch, [r] removes the last one, [c]")
+    progress("           clears all, [ESC] saves and exits once %d touches agree." % MIN_TOUCHES)
+    print()
 
-    arm = robot_io.connect_arm()
+    arm = robot.connect_arm()
     cap = open_camera()
     try:
         K, dist_coeffs = load_camera_intrinsics()
@@ -392,16 +400,18 @@ def main():
 
         capture = capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A)
         if capture is None:
-            print("Aborted - nothing saved.")
+            progress("Aborted - nothing saved.")
             return
         T_0_A, capture = capture
 
         n, p_face = top_face_plane(T_0_A, detector.marker_world)
-        print("\nNow move the arm manually and touch the artifact's TOP face")
-        print("several times - any point on the face, any wrist tilt.\n")
+        print()
+        progress("Now move the arm manually and touch the artifact's TOP face")
+        progress("several times - any point on the face, any wrist tilt.")
+        print()
         touches = capture_touch(arm, zeta, T_0_A, p_top_A, n, p_face)
         if touches is None:
-            print("Aborted - nothing saved.")
+            progress("Aborted - nothing saved.")
             return
 
         report_and_save(T_0_A, touches, p_top_A, T_6_C, capture)
