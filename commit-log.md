@@ -37,3 +37,12 @@ Working lab 3 code
 - docs/STRUCTURE.md and docs/lab3_instructions.md rewritten to the new module layout; scratch diagnostic files removed
 - py_compile and import checks clean across all src modules
 
+# v6 - Dead-man gate, streamed execution, automatic liftoff
+1 Nov 2026
+- All motion phases gated on holding [g]; releasing it halts the arm at once
+- [SPACE] toggles the vacuum with a 2 s settle before motion; a successful toggle ends the descent/seating phase
+- Post-pick lift and post-seating retreat run automatically after the toggle; arm disabled (controller state 4) at the end of the task
+- red/green renamed block/mask 1 and 2 throughout, so any block colour works
+- PathRecorder saves executed-path 3D plots + CSV; console vias overlayed as larger dots
+- Linear interpolation made the default profile
+- New streamed executor (servo mode 1, jolt-free) alongside the keygated position-mode one, selectable at start; both share the dead-man gate

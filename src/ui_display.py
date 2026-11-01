@@ -9,16 +9,16 @@ from lab_config import (AXES_LENGTH_MM, CAMERA_INDEX, CAMERA_MATRIX_NAME,
                         GRIPPER_CALIBRATION_NAME, RESULTS_NPY_NAME,
                         TOOL_OFFSET_MM, _clone_defaults, data_path)
 from motion import flange_pose_base
-from fk_lite6 import pose_from_xyz_rpy
+from so3 import rotation_exp_map
 from units import transform_from_pose_mm_rad
 from reporting import progress
 from vision import rgb_color_mask, compute_detection, detect_color_block, \
     project_base_to_uv
 import robot
 WINDOW = 'Lab 3 : Pick & Place'
-RED_MASK_WINDOW = 'Lab 3 : RED mask'
-GREEN_MASK_WINDOW = 'Lab 3 : GREEN mask'
-MASK_WINDOWS = [RED_MASK_WINDOW, GREEN_MASK_WINDOW]
+MASK1_WINDOW = 'Lab 3 : mask 1'
+MASK2_WINDOW = 'Lab 3 : mask 2'
+MASK_WINDOWS = [MASK1_WINDOW, MASK2_WINDOW]
 _PREVIEW_PX = (960, 540)          # half-screen at 1920x1080
 
 
@@ -30,12 +30,25 @@ def load_camera_intrinsics():
 
 
 def load_calibration_results():
-    """Calibrated DH zeta (Stage 2) + the hand-eye T_ee_cam fitted WITH it, from."""
+    """Calibrated DH zeta (Stage 2) + the hand-eye T_6_C fitted with it.
+
+    LAB3_ZETA=nominal loads the nominal DH instead (calibration_results.npy
+    stores both). t6c_stage2's rotation is a ROTATION VECTOR (Rodrigues), as
+    the calibration pipeline packs it — not Euler rpy.
+    """
 
     cal = np.load(data_path(RESULTS_NPY_NAME), allow_pickle=True).item()
-    T_6_C = pose_from_xyz_rpy(np.array(cal['t6c_stage2']))
-    return (np.asarray(cal['zeta_stage2'], dtype=float),
-            T_6_C)
+    use_nominal = os.environ.get('LAB3_ZETA', '').lower() == 'nominal'
+    zeta = np.asarray(cal['zeta_nominal' if use_nominal else 'zeta_stage2'],
+                      dtype=float)
+    v = np.asarray(cal['t6c_stage2'], dtype=float)
+    T_6_C = np.eye(4)
+    T_6_C[:3, :3] = rotation_exp_map(v[3:])
+    T_6_C[:3, 3] = v[:3] / 1000.0
+    progress('zeta: %s   T_6_C: [%s] mm'
+             % ('nominal DH' if use_nominal else 'stage-2 fit',
+                ', '.join('%.1f' % x for x in v[:3])))
+    return (zeta, T_6_C)
 
 
 def load_gripper_calibration():
@@ -88,7 +101,7 @@ _TB_SUFFIXES = ('lo', 'hi')
 
 
 def _win_for(color):
-    return RED_MASK_WINDOW if color == 'red' else GREEN_MASK_WINDOW
+    return MASK1_WINDOW if color == '1' else MASK2_WINDOW
 
 
 def _tb_name(color, band_idx, ch, suffix):
@@ -148,8 +161,8 @@ def draw_debug(mask, label, accent_bgr=(0, 0, 255)):
 def _both_masks(frame, K, dist_coeffs):
     """Both colour masks from one shared undistorted frame."""
     frame_u = cv2.undistort(frame, K, dist_coeffs)
-    return {'red': rgb_color_mask(frame_u, 'red'),
-            'green': rgb_color_mask(frame_u, 'green')}
+    return {'1': rgb_color_mask(frame_u, '1'),
+            '2': rgb_color_mask(frame_u, '2')}
 
 
 def draw_artifact_axes(frame, rvec, tvec, K, dist_coeffs, length_mm=None):
@@ -177,7 +190,7 @@ def draw_artifact_axes(frame, rvec, tvec, K, dist_coeffs, length_mm=None):
     return frame
 
 
-def show_frame(cap, status_line, info_lines=None, det=None, color='red', hint=None, extra_marks=None, K=None, dist_coeffs=None, axes=None):
+def show_frame(cap, status_line, info_lines=None, det=None, color='1', hint=None, extra_marks=None, K=None, dist_coeffs=None, axes=None):
     """Draw overlays + detection box on a fresh frame, display, return key."""
 
     ok, frame = cap.read()
@@ -215,9 +228,17 @@ def show_frame(cap, status_line, info_lines=None, det=None, color='red', hint=No
     cv2.imshow(WINDOW, disp)
     if K is not None:
         masks = _both_masks(frame, K, dist_coeffs)
-        cv2.imshow(RED_MASK_WINDOW, draw_debug(masks['red'], 'RED'))
-        cv2.imshow(GREEN_MASK_WINDOW, draw_debug(masks['green'], 'GREEN'))
-    return cv2.waitKey(1) & 0xFF
+        cv2.imshow(MASK1_WINDOW, draw_debug(masks['1'], 'MASK 1'))
+        cv2.imshow(MASK2_WINDOW, draw_debug(masks['2'], 'MASK 2'))
+    # Drain the key queue so a HELD key cannot keep feeding events to the
+    # caller after it is released — the g-gated motion must stop at once.
+    key = cv2.waitKey(1) & 0xFF
+    while True:
+        k_next = cv2.waitKey(1) & 0xFF
+        if k_next == 255:
+            break
+        key = k_next
+    return key
 
 
 def tune_masks(cap, K, dist_coeffs):
@@ -235,8 +256,8 @@ def tune_masks(cap, K, dist_coeffs):
         read_threshold_trackbars()
         masks = _both_masks(frame, K, dist_coeffs)
         cv2.imshow(WINDOW, frame)
-        cv2.imshow(RED_MASK_WINDOW, draw_debug(masks['red'], 'RED'))
-        cv2.imshow(GREEN_MASK_WINDOW, draw_debug(masks['green'], 'GREEN'))
+        cv2.imshow(MASK1_WINDOW, draw_debug(masks['1'], 'MASK 1'))
+        cv2.imshow(MASK2_WINDOW, draw_debug(masks['2'], 'MASK 2'))
         key = cv2.waitKey(30) & 0xFF
         if key in (13, 10):
             return True

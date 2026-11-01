@@ -1,11 +1,14 @@
 """Stage 1 of Lab 3: calibrate T_6_G (flange->cup tip) and T_G_C (gripper->camera)"""
 
 
+import os
+
 import cv2
 import json
 import numpy as np
 
 import aruco_artifact_detector
+import pnp_probe
 import robot
 from lab_config import (GRIPPER_CALIBRATION_NAME, TABLE_Z_MM, TOOL_OFFSET_MM,
                         data_path)
@@ -36,6 +39,12 @@ TOP_MARKER_ID = 0        # the flat face this marker sits on is the artifact's t
 MIN_TOUCHES = 3          # the consistency check needs several touches; about 6 is a good number
 CONSISTENCY_WARN_MM = 5.0  # per-touch d spread above this means the touches disagree
 GRAZE_COS = 0.5          # |n.z| below this (touch >60 deg from the face normal) is ill-conditioned
+CAPTURE_AGREE_WARN_MM = 10.0  # CAPTURE 1 repeats disagreeing more: one is a bad PnP solution
+INPLANE_WARN_MM = 20.0   # contacts farther than this from the face centre: CAPTURE 1 is suspect
+MIN_CAPTURE_MARKERS = 2  # PnP with fewer markers is ill-conditioned (tilt comes
+                         # from foreshortening alone) - refuse such captures
+MEDOID_TIE_MM = 5.0      # captures this close in total disagreement are tied;
+                         # the tiebreaker prefers the most markers seen
 
 KEY_CAPTURE = ord(' ')
 KEY_SAVE = 27            # ESC
@@ -55,13 +64,13 @@ def top_face_plane(T_0_A, marker_world, marker_id=TOP_MARKER_ID):
     """The top face as a PLANE in the base frame: (n, p_face), both (m)."""
 
     corners_A = marker_world[marker_id]
-    p_face_A = corners_A.mean(axis=0)
+    p_face_A = corners_A.mean(axis=0)   # [0, 0, 0]: frame A's origin is the face centre
     d1 = corners_A[2] - corners_A[0]
     d2 = corners_A[3] - corners_A[1]
     n_A = np.cross(d1, d2)
     n_A /= np.linalg.norm(n_A)
-    if n_A @ p_face_A < 0.0:        # outward = away from the artifact body
-        n_A = -n_A                  # (frame A's origin is the all-corner centroid)
+    # n's sign is arbitrary: the touch solve uses the plane equation n.x = n.p_face
+    # and the graze check uses |n.z|, both invariant to flipping n.
     R, t = T_0_A[:3, :3], T_0_A[:3, 3]
     return R @ n_A, R @ p_face_A + t
 
@@ -115,9 +124,16 @@ def _show_frozen(frame, status_line, info_lines, hint, marks, axes=None):
 
 
 def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
-    """CAPTURE 1: one camera look at the stationary artifact -> (T_0_A, capture)."""
+    """CAPTURE 1: camera looks at the stationary artifact -> (T_0_A, capture).
 
-    T_0_A = None
+    Several captures can be taken ([SPACE] each; move the wrist between them
+    so the views differ). The kept result is the capture whose top-face-centre
+    claim agrees best with the others, because one near-planar view can PnP to
+    a wildly wrong pose at a tiny reprojection error.
+    """
+
+    caps = []          # accepted captures: {'T_0_A', 'capture', 'p_claim'}
+    T_0_A = None       # capture awaiting confirmation
     capture = None
     frame_cap = None
     while True:
@@ -129,7 +145,14 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
         ret, frame = cap.read()
         det = detector.detect(frame) if ret else None
 
-        info = ["artifact pose: %s" % ("captured" if T_0_A is not None else "not captured")]
+        info = ["captures accepted: %d" % len(caps)]
+        if len(caps) >= 2:
+            cl = np.array([c['p_claim'] for c in caps]) * 1000.0
+            info.append("spread so far: %.1f mm"
+                        % float(np.linalg.norm(cl - cl.mean(axis=0), axis=1).max()))
+        info.append("artifact pose: %s"
+                    % ("captured - confirm it" if T_0_A is not None
+                       else "not captured"))
         if det is None:
             info.append("artifact NOT in view")
         else:
@@ -144,11 +167,20 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
         key = show_frame(
             cap, "CAPTURE 1 - artifact pose in the base frame", info_lines=info,
             axes=axes,
-            hint="[SPACE]=capture   [ESC]=save and exit   [r]=clear   [q]=abort")
+            hint="[SPACE]=capture   [ESC]=finish (>=1 capture)   [r]=clear   [q]=abort")
 
         if key == KEY_CAPTURE:
+            if T_0_A is not None:
+                continue           # a capture is pending: confirm it first
             if det is None:
                 progress("! nothing to capture: artifact not detected")
+                continue
+            if len(det['ids']) < MIN_CAPTURE_MARKERS:
+                progress("! only %d marker(s) in view - PnP with so few points"
+                         % len(det['ids']))
+                progress("  is ill-conditioned: move the wrist until %d or more"
+                         % MIN_CAPTURE_MARKERS)
+                progress("  markers are detected, then capture.")
                 continue
             capture = (q_rad, det['T_C_W'])
             frame_cap = frame.copy()
@@ -157,17 +189,44 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
                           'T_C_W': det['T_C_W'].tolist(),
                           'T_0_A': T_0_A.tolist(),
                           'marker_ids': det['ids'],
+                          'corners_px': det['image_points'].tolist(),
                           'reproj_px': float(det['reproj_px'])})
+            if os.environ.get('PNP_PROBE') == '1':
+                pnp_probe.run_probe(det, detector.K, detector.dist)
             field("captured", "T_0_A position [mm] = %s"
                   % np.array2string(T_0_A[:3, 3] * 1000.0, precision=1))
         elif key == ord('r'):
-            T_0_A = capture = frame_cap = None
-            progress("capture cleared - press [SPACE] to retake.")
+            if T_0_A is not None:
+                T_0_A = capture = frame_cap = None
+                progress("capture cleared - press [SPACE] to retake.")
+            else:
+                progress("nothing to clear.")
             continue
         elif key == KEY_SAVE:
-            if T_0_A is None:
+            if T_0_A is not None:
+                continue           # confirm or clear the pending capture first
+            if not caps:
                 progress("! nothing captured yet - press [SPACE] first.")
                 continue
+            claims = np.array([c['p_claim'] for c in caps])
+            D = np.linalg.norm(claims[:, None] - claims[None, :], axis=2)
+            # medoid of the face-centre claims; among captures within
+            # MEDOID_TIE_MM of the best total distance, keep the one that saw
+            # the most markers (best-conditioned PnP)
+            Dsum = D.sum(axis=1)
+            near = np.where(Dsum <= Dsum.min() + MEDOID_TIE_MM)[0]
+            k = int(near[int(np.argmax([caps[i]['n_markers'] for i in near]))])
+            spread_mm = float(D.max()) * 1000.0
+            field("kept capture", "%d of %d (%d markers); face-centre spread %.1f mm"
+                  % (k + 1, len(caps), caps[k]['n_markers'], spread_mm))
+            if len(caps) == 1:
+                progress("only one capture - no cross-check was possible.")
+            elif spread_mm > CAPTURE_AGREE_WARN_MM:
+                progress("WARNING: captures disagree by %.1f mm > %.1f mm -"
+                         % (spread_mm, CAPTURE_AGREE_WARN_MM))
+                progress("         a bad PnP solution is likely among them;")
+                progress("         [q] aborts so nothing bad is saved.")
+            return caps[k]['T_0_A'], caps[k]['capture']
         elif key == ord('q'):
             return None
         else:
@@ -209,8 +268,26 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
                 frozen_info, "[SPACE]=accept   [r]=retake   [q]=abort", marks,
                 axes=axes_cap)
             if k in (KEY_CAPTURE, KEY_SAVE):
-                progress("artifact pose accepted.")
-                return T_0_A, capture
+                p_claim = (T_0_A @ np.hstack([p_top_A, 1.0]))[:3]
+                caps.append({'T_0_A': T_0_A, 'capture': capture,
+                             'p_claim': p_claim, 'n_markers': len(det['ids'])})
+                if len(caps) == 1:
+                    progress("capture 1 accepted - [SPACE] for another (move"
+                             " the wrist between captures), [ESC] to finish.")
+                else:
+                    d_mm = float(np.linalg.norm(p_claim - caps[-2]['p_claim'])
+                                 * 1000.0)
+                    field("capture %d accepted" % len(caps),
+                          "%.1f mm from capture %d's face centre"
+                          % (d_mm, len(caps) - 1))
+                    if d_mm > CAPTURE_AGREE_WARN_MM:
+                        progress("  WARNING: above %.1f mm - at least one of"
+                                 " these two captures is a bad"
+                                 % CAPTURE_AGREE_WARN_MM)
+                        progress("  PnP solution; retake them ([q] aborts,"
+                                 " the log keeps everything).")
+                T_0_A = capture = frame_cap = None
+                break
             if k == ord('r'):
                 progress("capture cleared - press [SPACE] to retake.")
                 T_0_A = capture = frame_cap = None
@@ -343,6 +420,13 @@ def report_and_save(T_0_A, touches, p_top_A, T_6_C, capture):
         progress("WARNING: per-touch d spread %.2f mm > %.2f mm - the touches"
                  % (d_std_mm, CONSISTENCY_WARN_MM))
         progress("         disagree. Check the GRAZE flags and retake outliers.")
+    inplane_mm = np.array([t['inplane_mm'] for t in touches])
+    if inplane_mm.max() > INPLANE_WARN_MM:
+        progress("WARNING: contacts up to %.1f mm from the face centre"
+                 % inplane_mm.max())
+        progress("         (> %.1f mm): the touches are landing away from where"
+                 % INPLANE_WARN_MM)
+        progress("         CAPTURE 1 puts the face centre - CAPTURE 1 is suspect.")
     field("T_G_C", "translation [mm] %s"
           % np.array2string(T_G_C[:3, 3] * 1000.0, precision=1))
     field("T_G_A", "translation [mm] %s   (artifact relative to the tool at the"
@@ -372,11 +456,13 @@ def report_and_save(T_0_A, touches, p_top_A, T_6_C, capture):
 
 
 def main():
-    banner("STAGE 1 - GRIPPER CALIBRATION (one camera capture + several touches)")
-    progress("CAPTURE 1: hold the artifact still and let the camera look at it once.")
-    progress("           [SPACE] captures and FREEZES the frame so you can check the")
-    progress("           pose and the marked touch point before accepting it; the")
-    progress("           live feed is only needed again for a retake.")
+    banner("STAGE 1 - GRIPPER CALIBRATION (several camera captures + several touches)")
+    progress("CAPTURE 1: hold the artifact still and let the camera look at it")
+    progress("           SEVERAL times: [SPACE] captures and FREEZES the frame so")
+    progress("           you can check the pose and the marked touch point before")
+    progress("           accepting it; move the wrist between captures so the views")
+    progress("           differ. The capture agreeing best with the others is kept,")
+    progress("           so one bad PnP solution cannot silently define T_0_A.")
     progress("CAPTURE 2: move the arm BY HAND and touch the artifact's TOP face (the")
     progress("           flat face carrying marker %d) with the cup tip SEVERAL times,"
              % TOP_MARKER_ID)

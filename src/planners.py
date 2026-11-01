@@ -7,7 +7,11 @@ from so3 import rotation_log_map
 
 
 def _blend_linear(s):
-    """Constant-speed blend."""
+    """Constant-speed blend: velocity continuous through the segment ends
+    (the arm never stops at a via point), acceleration zero everywhere.
+    This is the profile for smooth g-gated tracking — cubic and quintic
+    ease to a full stop at every segment end and crowd the waypoints
+    there, which shows up as jolting under the dead-man executor."""
     return s
 
 

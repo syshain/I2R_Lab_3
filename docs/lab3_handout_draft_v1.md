@@ -8,14 +8,12 @@
 
 **STUDENT HANDOUT**
 
-| | |
-|---|---|
-| Academic year | 2026–27 |
-| Version | Draft 1 — [date] |
-| Author | Prof Ferdinando Rodriguez y Baena |
-| Contact | Microsoft Teams or 020 7594 7046 |
-| Module leader | Nicolas Cinosi |
-| Runs in | Weeks 17 and 18, Spring 2027, MTX Laboratory |
+- **Academic year:** 2026–27
+- **Version:** Draft 1 — [date]
+- **Author:** Prof Ferdinando Rodriguez y Baena
+- **Contact:** Microsoft Teams or 020 7594 7046
+- **Module leader:** Nicolas Cinosi
+- **Runs in:** Weeks 17 and 18, Spring 2027, MTX Laboratory
 
 ---
 
@@ -28,7 +26,7 @@ In Laboratory 2 you calibrated the kinematics of the arm and the transform from 
 The session has four tasks:
 
 1. **Task 1** — measure the flange-to-cup offset with one camera capture and several touches: the camera looks at the ArUco artifact once, putting its top face in the base frame through the calibrated chain; you then move the arm to touch that face several times by hand, and the agreement of the per-touch solutions recovers the one unknown tool translation. From it you form T_G_C and see the whole chain report the artifact relative to the tool.
-2. **Task 2** — segment the red and green blocks by HSV colour, tuning thresholds live against the actual bench lighting.
+2. **Task 2** — segment the red and green blocks with per-channel RGB threshold bands, tuning them live against the actual bench lighting.
 3. **Task 3** — estimate a block's position and yaw in one shot from its known 25 mm size, then plan and fly a via-point transit that stops the cup 50 mm back along the cup axis from the estimate. You try linear, cubic and quintic interpolation and compare them.
 4. **Task 4** — stack the blocks: green to the stack base, red on top of green, every final approach jogged by hand under key control, with the vacuum engaging only when you press SPACE.
 
@@ -42,7 +40,7 @@ The session has four tasks:
 | OpenCV 4 | ArUco detection, colour segmentation, camera windows |
 | NumPy / SciPy | Linear algebra, least squares, the inverse kinematics solver from Laboratory 2 |
 | UFactory Studio (browser, port 18333) | Robot dashboard: enabling, Manual Mode, parking |
-| xArm Python SDK | Every hardware call, wrapped in `robot_io.py` |
+| xArm Python SDK | Every hardware call, wrapped in `robot.py` |
 
 You need the same virtual environment you built for Laboratory 2 (Section 1.3). Nothing in this laboratory installs anything new.
 
@@ -52,7 +50,7 @@ Work through these steps in order at the start of the session.
 
 (a) Log in to the station PC and open UFactory Studio at `localhost:18333` in the browser. Confirm the robot is *enabled* and put it into Manual Mode, exactly as in Laboratory 2. Manual Mode is what lets your key presses move the arm in Task 4.
 
-(b) Check the robot address in `src/robot_io.py` (`ROBOT_IP`) matches the bench you are sitting at. It is the same address you used in Laboratory 2.
+(b) Check the robot address in `src/robot.py` (`ROBOT_IP`) matches the bench you are sitting at. It is the same address you used in Laboratory 2.
 
 (c) Open a terminal in your extracted `Lab_3` folder and activate the environment:
 
@@ -63,7 +61,7 @@ source .venv/bin/activate     (Linux/macOS)
 pip install -r requirements.txt   (only on first use)
 ```
 
-(d) Confirm the calibration files from Laboratory 2 are present in `data/`: `camera_matrix.npy`, `dist_coeffs.npy` and `calibration_results.npy`. Task 1 loads `calibration_results.npy`, which holds the calibrated DH parameters (zeta_stage2) and the hand-eye transform T₆C fitted together with them in Laboratory 2's final stage — the two were solved against each other, so they are used as a pair. **If your pair calibrated at a different bench, ask your GTA for a copy of that station's files** — a T₆C from another camera mount is worse than none.
+(d) Confirm the calibration files from Laboratory 2 are present in `data/`: `camera_matrix.npy`, `dist_coeffs.npy` and `calibration_results.npy`. Task 1 loads `calibration_results.npy`, which holds the calibrated DH parameters (zeta_stage2) and the hand-eye transform T_6_C fitted together with them in Laboratory 2's final stage — the two were solved against each other, so they are used as a pair. **If your pair calibrated at a different bench, ask your GTA for a copy of that station's files** — a T_6_C from another camera mount is worse than none.
 
 (e) Confirm the ArUco artifact and the two wooden blocks (one red, one green, 25 mm cubes) are at your bench. The artifact stays where Laboratory 2 left it for now; Task 1 will tell you what to do with it.
 
@@ -105,7 +103,7 @@ This laboratory develops the following learning outcomes, which are assessed thr
 
 You cannot complete this laboratory without the following, all from Laboratory 2. Check them before the session; there is no time to redo them during it.
 
-- A working inverse-kinematics solver. Laboratory 3 imports the one you wrote (`ik_solver.py`, unchanged from Laboratory 2).
+- A working inverse-kinematics solver. Provided this time: `src/ik_lite6.py` runs the same residual-based solver you completed in Laboratory 2, against your station's calibrated DH parameters.
 - The camera intrinsics (`camera_matrix.npy`, `dist_coeffs.npy`) from Laboratory 1.
 - The joint-based hand-eye transform `T_ee_cam` and the calibrated DH parameters fitted together with it (Stage 2), saved together in `data/calibration_results.npy` by Laboratory 2's `run_calibration.py`.
 
@@ -120,7 +118,7 @@ The tasks end with "Look up" lines. These codes are what they mean; each is a sh
 | S1 | Frames and homogeneous transformations in the manipulation chain (refresher on Laboratory 1) |
 | S2 | The pinhole camera model, intrinsics and distortion |
 | S3 | Least squares: normal equations, the pseudo-inverse, and when a solution is not unique |
-| S4 | Colour spaces and HSV thresholding, including the hue wraparound |
+| S4 | Colour spaces and thresholding; Laboratory 3's masks are per-channel RGB bands |
 | S5 | Depth from known size: similar triangles and the pixel-width formula |
 | S6 | Trajectory interpolation: blending functions and orientation interpolation on SO(3) |
 | S7 | Observability and gauge freedoms in calibration problems |
@@ -132,37 +130,37 @@ The tasks end with "Look up" lines. These codes are what they mean; each is a sh
 
 ### 5.1 The hand and the eye
 
-Figure 1 shows the chain of transforms this laboratory works with. The base frame {0} is fixed in the robot. Joint readings give the flange pose T₀₆ through forward kinematics. Laboratory 2's calibration gave the flange-to-camera transform T₆C. This laboratory adds the flange-to-cup transform T₆G — one number, the tool offset d along the flange axis — and the camera-to-gripper transform T_G_C = T₆G⁻¹ T₆C that ties the two wrist tools together.
+Figure 1 shows the chain of transforms this laboratory works with. The base frame {0} is fixed in the robot. Joint readings give the flange pose T_0_6 through forward kinematics. Laboratory 2's calibration gave the flange-to-camera transform T_6_C. This laboratory adds the flange-to-cup transform T_6_G — one number, the tool offset d along the flange axis — and the camera-to-gripper transform T_G_C = T_6_G⁻¹ T_6_C that ties the two wrist tools together.
 
 The wrist camera is *eye-in-hand*: it moves with the arm, so everything it measures is known only relative to the flange. When the camera looks at the artifact, the measurement chain is
 
-  T₀_W = T₀₆ · T₆C · T_C_W  (camera route),  or  T₀_W = T₀₆ · T₆G · T_G_W (gripper route)
+  T_0_W = T_0_6 · T_6_C · T_C_W  (camera route),  or  T_0_W = T_0_6 · T_6_G · T_G_W (gripper route)
 
-and here is the difficulty: the camera never sees the cup, and the cup never touches anything the camera can independently locate *in the same measurement*. If you multiply the camera route by any rigid motion that moves the *whole world* — the artifact, the table, everything — both routes change by the same amount and no camera observation can tell the difference. This is a *gauge freedom* (S7): the pair (T₆G, T_G_C) is observable from camera data only through their product T₆C. Laboratory 2 already fixed T₆C, so Task 1 does not re-solve it. Instead it pins T₆G with a measurement of a different kind entirely: *touch*.
+and here is the difficulty: the camera never sees the cup, and the cup never touches anything the camera can independently locate *in the same measurement*. If you multiply the camera route by any rigid motion that moves the *whole world* — the artifact, the table, everything — both routes change by the same amount and no camera observation can tell the difference. This is a *gauge freedom* (S7): the pair (T_6_G, T_G_C) is observable from camera data only through their product T_6_C. Laboratory 2 already fixed T_6_C, so Task 1 does not re-solve it. Instead it pins T_6_G with a measurement of a different kind entirely: *touch*.
 
 ### 5.2 Touch calibration of the tool offset
 
 The measurement takes one camera capture and several touches, and no stage involves a least-squares solve: each touch is one linear equation in the single unknown d.
 
-**Capture 1: the camera look.** With the artifact stationary, one frame in which the camera sees it gives the artifact-to-camera transform T_C_W. The chain calibrated in Laboratory 2 turns that into the artifact pose in the base frame, using the joint readings at that moment for T₀₆:
+**Capture 1: the camera look.** With the artifact stationary, one frame in which the camera sees it gives the artifact-to-camera transform T_C_W. The chain calibrated in Laboratory 2 turns that into the artifact pose in the base frame, using the joint readings at that moment for T_0_6:
 
-  T₀_A = T₀₆ · T₆C · T_C_W
+  T_0_A = T_0_6 · T_6_C · T_C_W
 
 The artifact model declares one face the *top face* — the flat face carrying marker 0 — and its centre is simply the average of that marker's four corners, p_top in the artifact frame. Before the arm moves at all, the camera has already located, in the base frame, the very point the cup is about to touch.
 
-**Capture 2: the touches.** You now move the arm by hand and bring the cup down onto the top face several times — at least three, and about six is a good number. No touch has to be vertical or at the face centre: a hand-guided arm cannot reliably achieve either, and the formulation below does not ask for it. The top face is a *plane*. From the CAPTURE 1 pose T₀_A, the top-face marker's four corners give the face's outward unit normal n and a point p_face on it, both in the base frame. At touch i the joint readings give the flange pose (R_i, p_i) through forward kinematics, and the cup tip sits a fixed distance d along the flange +z axis (Figure 1) — the camera's optical axis, and so the cup, lies almost exactly along flange +z. Wherever on the face the tip lands, and at whatever wrist tilt, two things are true at that instant: the contact point lies in the face plane, and the tip position is t_i + d·z_i with t_i = p_i and z_i the flange +z axis in the base frame. Each touch is therefore one linear equation in the single unknown d:
+**Capture 2: the touches.** You now move the arm by hand and bring the cup down onto the top face several times — at least three, and about six is a good number. No touch has to be vertical or at the face centre: a hand-guided arm cannot reliably achieve either, and the formulation below does not ask for it. The top face is a *plane*. From the CAPTURE 1 pose T_0_A, the top-face marker's four corners give the face's outward unit normal n and a point p_face on it, both in the base frame. At touch i the joint readings give the flange pose (R_i, p_i) through forward kinematics, and the cup tip sits a fixed distance d along the flange +z axis (Figure 1) — the camera's optical axis, and so the cup, lies almost exactly along flange +z. Wherever on the face the tip lands, and at whatever wrist tilt, two things are true at that instant: the contact point lies in the face plane, and the tip position is t_i + d·z_i with t_i = p_i and z_i the flange +z axis in the base frame. Each touch is therefore one linear equation in the single unknown d:
 
   n · (t_i + d·z_i) = n · p_face,
 
 solved per touch for its own d_i. The check is *consistency*, the same mean/spread reporting the other labs use: the script records every touch, shows the running mean, standard deviation and spread of the d_i, and warns above 5 mm. A touch nearly parallel to the face (|n · z_i| small) divides by a near-zero number, so its d_i is unreliable: the script flags such a touch as a *graze*, and 'r' removes the last touch ('c' clears all) so a bad touch can be dropped before ESC saves the set.
 
-With d known, T₆G follows immediately (a pure translation of d along the flange +z axis), and T_G_C = T₆G⁻¹ T₆C completes the chain. The report prints a per-touch table — each touch's d, wrist tilt, distance from the face centre and flags — then d's mean, standard deviation and spread next to the nominal 75 mm for reference. It also prints T_G_A, the artifact pose as the gripper frame sees it at the moment of a touch: the transform that says where the object sits relative to the tool, which is what a grasp actually consumes. T_G_A is pose-dependent — each touch lands at its own in-plane point — so the report keeps the touch that landed closest to the face centre as the representative one. The consistency check is the check on all of this: if the per-touch d_i agree tightly, the touches really did place the tip on the flange axis in the plane the camera named, and d can be trusted.
+With d known, T_6_G follows immediately (a pure translation of d along the flange +z axis), and T_G_C = T_6_G⁻¹ T_6_C completes the chain. The report prints a per-touch table — each touch's d, wrist tilt, distance from the face centre and flags — then d's mean, standard deviation and spread next to the nominal 75 mm for reference. It also prints T_G_A, the artifact pose as the gripper frame sees it at the moment of a touch: the transform that says where the object sits relative to the tool, which is what a grasp actually consumes. T_G_A is pose-dependent — each touch lands at its own in-plane point — so the report keeps the touch that landed closest to the face centre as the representative one. The consistency check is the check on all of this: if the per-touch d_i agree tightly, the touches really did place the tip on the flange axis in the plane the camera named, and d can be trusted.
 
 ### 5.3 Seeing the blocks: colour and known size
 
 The blocks are found in three steps, all in `vision.py`.
 
-**Colour.** Each frame is converted from BGR to HSV, and a pixel belongs to a colour if its H, S and V fall inside any of that colour's *bands* — ranges of each channel set in `lab_config.py` and adjustable live with the trackbars of Task 2. Two details matter. First, OpenCV hue runs 0 to 179, so red straddles the wraparound: it is *two* bands, one near 0 and one near 179, and a pixel is red if it is in either (S4). Second, the saturation floor is what rejects the bench: wood, shadows and the grey table all have low saturation, so a floor around 50–70 keeps them out of the mask.
+**Colour.** There is no colour-space conversion: the masks threshold the raw BGR frame directly, a pixel belonging to a colour if its red, green and blue values each fall inside that colour's *bands* — one lo/hi range per channel, set in `lab_config.py` and adjustable live with the trackbars of Task 2. What rejects the bench is the capping: the bench's wood, shadows and grey table are greyish, and a grey pixel cannot be bright in one channel and dark in the other two at the same time. The red band demands a high red value and caps green and blue; the green band is its mirror image. If several bands were defined for a colour they would be OR-ed together — a pixel joins the mask if it passes any of them — though red and green each ship with a single band by default.
 
 The largest connected blob in the mask above a minimum area becomes the detection, reported as a bounding box and centroid. Blobs filling more than half the frame are rejected — that is usually the mask flooding.
 
@@ -172,7 +170,7 @@ The largest connected blob in the mask above a minimum area becomes the detectio
 
 This formula has a hidden assumption: it treats the silhouette as a fronto-parallel face of width w. Your camera views the block from the wrist, tilted by 15–35° in practice, and a tilted cube's silhouette is *longer* than its top face — the top face foreshortens to S·cos α while a side face of height S·sin α leans into view. Feeding that elongated width into Z ≈ f_x·S/w reads the block *closer* than it is: tens of millimetres at these angles, which is most of the 50 mm hover budget.
 
-`vision.py` therefore does not patch the formula; it fits the pose. A block on the table has its top face at a *known* height (table surface plus one block side), so the only unknowns are the block's (x, y) and yaw. `fit_block_pose()` projects a hypothesised cube into the image, measures its silhouette exactly the way the detector measures the real one (minAreaRect centre, both extents, angle), and adjusts (x, y, yaw) until the two silhouettes agree — a perspective-correct inversion of the forward model, seeded at the naive Z ≈ f_x·S/w estimate. When the fit cannot explain the contour (a cluttered or broken mask) it falls back to the naive estimate and says so on the console.
+`vision.py` therefore does not patch the formula; it fits the pose. The block's height is *not* assumed: a block may sit on the table or on top of the other block, and from a tilted wrist view a fixed height guess would place the estimate at the wrong depth along the camera ray anyway. `fit_block_pose()` treats all four unknowns — the block's (x, y, z) and yaw — projecting a hypothesised cube into the image, measuring its silhouette exactly the way the detector measures the real one (minAreaRect centre, both extents, angle), and adjusting all four until the two silhouettes agree — a perspective-correct inversion of the forward model, seeded at the naive Z ≈ f_x·S/w estimate. Whatever height the seed gets wrong, the fit recovers. When the fit cannot explain the contour (a cluttered or broken mask) it falls back to the naive estimate and says so on the console.
 
 **Yaw.** `estimate_block_yaw()` reads the block's rotation about the vertical from the minimum-area rectangle fitted to the top-face blob: OpenCV's `minAreaRect` returns an angle α for a rectangle of width w and height h, and the block's yaw is ψ = α − θ, where θ picks the rectangle edge that corresponds to the block's front edge. This reading is exact looking straight down and drifts as the view tilts, which is why `fit_block_pose()` refines it: the one-shot estimate reports the fitted yaw. Either way, yaw from a square face is only defined modulo 90° — the detector cannot tell an edge from the perpendicular edge. The cup is rotationally symmetric, so the yaw governs nothing in the motion — it is a deliverable, because in Task 4 you compare it against where the block actually ended up.
 
@@ -186,7 +184,7 @@ A planned transit in this laboratory is a sequence of *via points* you choose, j
 | cubic | 3s² − 2s³ | zero velocity at both ends of each segment; still corner-ish at vias |
 | quintic | 10s³ − 15s⁴ + 6s⁵ | zero velocity *and* zero acceleration at both ends; smoothest, slowest |
 
-Orientation is interpolated on SO(3), not on angles: the relative rotation R₁R₀ᵀ is mapped to its rotation vector ω (S1), a fraction s of ω is mapped back with the exponential map, and the result premultiplies R₀. Interpolating roll-pitch-yaw numbers directly does not follow a rotation and can twist the long way round.
+Orientation is interpolated on SO(3), not on angles: the relative rotation R1·R0ᵀ is mapped to its rotation vector ω (S1), a fraction s of ω is mapped back with the exponential map, and the result premultiplies R0. Interpolating roll-pitch-yaw numbers directly does not follow a rotation and can twist the long way round.
 
 For each pose on the path the solver computes inverse kinematics *before the arm moves* — the whole path is solved first, and if any pose fails, nothing has moved. This is deliberate: an arm that discovers an unreachable pose halfway through a transit is an arm hanging over your blocks.
 
@@ -204,13 +202,13 @@ Why via points at all? Because the straight line from where you are to above the
 
 You will complete four functions in `src/handeye_gripper.py`: `top_face_centre()`, `artifact_pose_in_base()`, `top_face_plane()` and `touch_d_estimate()`. The two capture loops (`capture_artifact_pose`, `capture_touch`) and the report (`report_and_save`) are provided — read them, because they show exactly how your functions are used. Everything the script prints is for your tables; the transforms are yours.
 
-(a) **Open the calibration script and read it.** `handeye_gripper.py` runs one camera capture and one touch stage: CAPTURE 1 takes one camera look at the stationary artifact and forms T₀_A through the calibrated chain; CAPTURE 2 records a set of touches on the artifact's top face. Note the constants at the top of the file: which marker marks the top face, the minimum number of touches, the consistency warning and the graze threshold. What each is for is Section 5.2 and Question 1.1.
+(a) **Open the calibration script and read it.** `handeye_gripper.py` runs one camera capture and one touch stage: CAPTURE 1 takes one camera look at the stationary artifact and forms T_0_A through the calibrated chain; CAPTURE 2 records a set of touches on the artifact's top face. Note the constants at the top of the file: which marker marks the top face, the minimum number of touches, the consistency warning and the graze threshold. What each is for is Section 5.2 and Question 1.1.
 
 (b) **Complete `top_face_centre()`.** It returns the centre of the top face as the average of the top-face marker's four corners. The corner coordinates come from `board_config.json`, which — unlike Laboratory 2's re-centred corner model — uses the raw board frame, so **do not copy the corner handling from your Laboratory 2 detector**.
 
-(c) **Complete `artifact_pose_in_base()`** and run CAPTURE 1. The function is one chain: forward kinematics from the joint readings, Laboratory 2's T₆C, and the detection's T_C_W. Lay the artifact flat with its marker-0 face up, keep it still, and press SPACE once the live window reports the artifact in view. While the artifact is in view, the live window also draws the artifact frame W's own axes from its origin — the centroid of all the artifact's marker corners, the same convention as Laboratory 2 (length `AXES_LENGTH_MM` in `lab_config.py`): check that x, y and z point where the handout's frame definition says they should before you trust T_C_W. SPACE freezes the frame: the pose is then checked on a static image that also marks, with a cross, the point the cup tip must later touch (the axes stay drawn there too). SPACE on the frozen frame accepts the capture ('r' retakes, 'q' aborts); the camera feed is not needed while you check. Record the reprojection error and T₀_A's position in Table 1.
+(c) **Complete `artifact_pose_in_base()`** and run CAPTURE 1. The function is one chain: forward kinematics from the joint readings, Laboratory 2's T_6_C, and the detection's T_C_W. Lay the artifact flat with its marker-0 face up, keep it still, and press SPACE once the live window reports the artifact in view. While the artifact is in view, the live window also draws the artifact frame W's own axes from its origin — the centroid of all the artifact's marker corners, the same convention as Laboratory 2 (length `AXES_LENGTH_MM` in `lab_config.py`): check that x, y and z point where the handout's frame definition says they should before you trust T_C_W. SPACE freezes the frame: the pose is then checked on a static image that also marks, with a cross, the point the cup tip must later touch (the axes stay drawn there too). SPACE on the frozen frame accepts the capture ('r' retakes, 'q' aborts); the camera feed is not needed while you check. Record the reprojection error and T_0_A's position in Table 1.
 
-> **If the detection is weak or the reprojection error is large** — the T₀_A you are saving here is what turns the touch into a measurement, so it is worth being sure of. Check that all five markers were seen, that the artifact did not move between the detection and the capture, and that the 15 px reprojection gate (as Laboratory 2) is not silently rejecting views. Re-run rather than continuing: CAPTURE 2 measures the touch against this pose.
+> **If the detection is weak or the reprojection error is large** — the T_0_A you are saving here is what turns the touch into a measurement, so it is worth being sure of. Check that all five markers were seen, that the artifact did not move between the detection and the capture, and that the 15 px reprojection gate (as Laboratory 2) is not silently rejecting views. Re-run rather than continuing: CAPTURE 2 measures the touch against this pose.
 
 (d) **Move the arm by hand for CAPTURE 2.** Put the arm into hand-guiding mode in UFactory Studio so you can move it freely. CAPTURE 2 shows no camera feed at all: no detection, no colour masks, just a status panel reporting how many touches are recorded and the running statistics of Section 5.2. The artifact will usually not be in view under the cup, and nothing needs to be. No touch has to be vertical or at the face centre — Section 5.2 explains why. Do not record yet.
 
@@ -223,7 +221,7 @@ You will complete four functions in `src/handeye_gripper.py`: `top_face_centre()
 | Quantity | Value |
 |---|---|
 | Reprojection error of CAPTURE 1 (px) | ............ |
-| Artifact position T₀_A (x, y, z mm) | ............ |
+| Artifact position T_0_A (x, y, z mm) | ............ |
 | Per-touch d values (mm, one per touch) | ............ |
 | Nominal TOOL_OFFSET_MM, for reference (mm) | ............ |
 | d standard deviation / spread (mm) | ............ |
@@ -241,7 +239,7 @@ Response:
    **Möbius M1.1: answer now, on your own**
    Answer the question on what the touch agreement tests. Look up: S1.
 
-**Question 1.2** Section 5.1 argues that camera data alone can never pin T₆G. Your touch measurement did. State precisely what new information the touch provides that a camera observation cannot, in one sentence.
+**Question 1.2** Section 5.1 argues that camera data alone can never pin T_6_G. Your touch measurement did. State precisely what new information the touch provides that a camera observation cannot, in one sentence.
 
 Response:
 
@@ -268,9 +266,9 @@ Response:
 
 **Purpose.** To segment the red and green blocks reliably under your bench's actual lighting, and to understand which channel is doing the work, before any motion depends on the detections.
 
-You will complete `_hsv_color_mask()` and `_best_blob()` in `src/vision.py`. The live tuning interface (`tune_masks()` in `ui_display.py`) and the defaults in `lab_config.py` are provided.
+You will complete `rgb_color_mask()` and `_best_blob()` in `src/vision.py`. The live tuning interface (`tune_masks()` in `ui_display.py`) and the defaults in `lab_config.py` are provided.
 
-(a) **Complete `_hsv_color_mask()`.** Convert the frame to HSV, build one binary mask per band of the colour (red has two, green one), and OR them together. Morphological opening and closing are applied for you after your function returns; what your function must get right is the per-band comparison and the combination.
+(a) **Complete `rgb_color_mask()`.** The frame arrives already undistorted; build one binary mask per band of the colour — each band one lo/hi range on every channel, and `cv2.inRange` applies one band — and OR the bands together. The defaults give red a single band and green a single band. Nothing is cleaned up after your function returns: the mask you return is the mask the detector uses, so what you must get right is the per-channel comparison and the combination.
 
 (b) **Complete `_best_blob()`.** From the mask, find the connected components, discard those below the minimum area or above the maximum frame fraction, and return the bounding box, centroid, minimum-area rectangle *and raw contour* of the largest survivor. The pixel width is what Section 5.3's depth formula consumes, and the raw contour is what `fit_block_pose()` measures — think about which width you return for a block seen at an angle, because Task 3's accuracy depends on it.
 
@@ -278,31 +276,30 @@ You will complete `_hsv_color_mask()` and `_best_blob()` in `src/vision.py`. The
 
 (d) **Stress the masks before accepting.** Slide the blocks around the bench, swap their positions, and shade the camera with your hand. A mask that works in one corner of the bench and fails in another will fail during Task 4, at the worst moment. Record your accepted bands in Table 2 and note where the masks are fragile.
 
-**Table 2: Your accepted HSV bands (H in 0–179)**
+**Table 2: Your accepted RGB bands (each band a lo/hi range on every channel)**
 
-| Colour | Band | H lo | H hi | S lo | S hi | V lo | V hi |
+| Colour | Band | R lo | R hi | G lo | G hi | B lo | B hi |
 |---|---|---|---|---|---|---|---|
 | red | 1 | ...... | ...... | ...... | ...... | ...... | ...... |
-| red | 2 | ...... | ...... | ...... | ...... | ...... | ...... |
 | green | 1 | ...... | ...... | ...... | ...... | ...... | ...... |
 
-**Question 2.1** The saturation floor rejects most of the table and bench. Give one lighting change in the room that would make a correct-looking floor of 70 start failing, and say in which direction the floor should move to survive it.
+**Question 2.1** The red band's caps on green and blue are what reject most of the table and bench: a grey surface cannot be bright in red and dark in the other two channels at once. Give one lighting change in the room that would make the default red band start failing — either flooding onto the bench or losing the block — and say which bound you would retune first to survive it.
 
 Response:
 
 .....................................................................................................................................................................
 
    **Möbius M2.1: answer now, on your own**
-   Answer the question on HSV robustness. Look up: S4.
+   Answer the question on colour-threshold robustness. Look up: S4.
 
-**Question 2.2** Red needs two hue bands and green needs one. Explain the wraparound that makes this necessary, and state the H value a third colour would need to straddle if you added a magenta block.
+**Question 2.2** The masks allow more than one band per colour, though the defaults ship exactly one for red and one for green. Explain what a second band is for — for example, a red block partly in shadow — and what distinguishes the pixels a second band admits from those the first already covers.
 
 Response:
 
 .....................................................................................................................................................................
 
    **Möbius M2.2: answer now, on your own**
-   Answer the question on the hue wraparound. Look up: S4.
+   Answer the question on multi-band masks. Look up: S4.
 
 > **✔ Checkpoint 2**
 > Show your GTA Table 2 and your tuned masks on the live feed. **GTA initials: ____________**
@@ -315,7 +312,7 @@ Response:
 
 You will complete `one_shot_estimate()`, `fit_block_pose()` and `estimate_block_yaw()` in `src/vision.py`, and the blending and composition functions in `src/planners.py` (`_blend_linear`, `_blend_cubic`, `_blend_quintic`, `interpolate_pose`, `plan_via_path`). The interactive pipeline in `pick_and_place.py` — profile choice, via prompts, IK-before-motion execution — is provided; read `execute_path()` before flying anything, because its fail-before-move discipline is the safety argument of Question 3.2.
 
-(a) **Complete the pose estimate.** In `one_shot_estimate()`, first unproject the blob centroid to the base frame at the known-size depth Z = f_x·S/w of Section 5.3, using the camera pose chain T_cam = T_flange · T_ee_cam. The result estimates the block's **top-face centre** — think about why the top face and not the centroid of the whole cube. Then pass that baseline into `fit_block_pose()`, which corrects it for the camera's tilt onto the block: complete it following its docstring, projecting a hypothesised cube into the image and matching its silhouette against the measured contour. Record both estimates and compare them — the gap between the two is the tilt error of Section 5.3, measured by you.
+(a) **Complete the pose estimate.** In `one_shot_estimate()`, first unproject the blob centroid to the base frame at the known-size depth Z = f_x·S/w of Section 5.3, using the camera pose chain T_cam = T_flange · T_ee_cam. The result estimates the block's **top-face centre** — think about why the top face and not the centroid of the whole cube. Then pass that baseline into `fit_block_pose()`, which refines all four unknowns — the block's (x, y, z) and yaw — without assuming the table's height: complete it following its docstring, projecting a hypothesised cube into the image and matching its silhouette against the measured contour. Record both estimates and compare them — the gap between the two is the tilt error of Section 5.3, measured by you.
 
 (b) **Complete the yaw estimate** in `estimate_block_yaw()` from the minimum-area rectangle of the top-face blob, following Section 5.3. Handle the angle ambiguity: a square block has 90° symmetry, so report the yaw modulo 90°. `one_shot_estimate()` reports the yaw from the silhouette fit; keep `estimate_block_yaw()` as the baseline reading and compare the two in part (c).
 
@@ -381,7 +378,7 @@ Response:
 
 **EXTENSION | 15 min | LO2 | ILO 8.2 | Look up S5, S7**
 
-(a) Temporarily load an identity T₆C (rename `gripper_calibration.npy` and let the script fall back to its default) and repeat steps (c) and (e) of Task 3.
+(a) Temporarily load an identity T_6_C (rename `gripper_calibration.npy` and let the script fall back to its default) and repeat steps (c) and (e) of Task 3.
 
 (b) Record how the estimate and the hover move, and explain the direction of the error from the geometry of Section 5.1: which transform in the chain is the identity standing in for, and what does its absence do to the lever arm between camera and cup?
 
@@ -401,7 +398,7 @@ Response:
 
 **Purpose.** To complete an integrated pick-and-place task — green block to the stack base, red block on top of the green — using everything calibrated and written so far, with you supplying the judgement that the estimates cannot.
 
-You will complete `keygate_approach()` in `src/key_control.py` and wire the two transfers in `do_transfer()` / `run()` in `src/pick_and_place.py`. The vacuum wrappers in `robot_io.py` are provided.
+You will complete `keygate_approach()` in `src/key_control.py` and wire the two transfers in `do_transfer()` / `run()` in `src/pick_and_place.py`. The vacuum wrappers in `robot.py` are provided.
 
 (a) **Complete `keygate_approach()`.** Starting from the hover, each key press is one `KEY_STEP_MM` step of the cup tip in the base frame, at `KEY_SPEED_PCT` (the full legend is Appendix B.2). The flange pose for a given tip position comes from `flange_for_tip()`, which holds the wrist orientation fixed while the tip moves — note that the tip is a point on the flange's z axis, so a base-frame tip step is *not* a base-frame flange step; that translation is what your function composes. Clamp the tip to no lower than 2 mm above the table — the final press to contact is yours to make deliberately, not a step size's.
 
@@ -451,7 +448,7 @@ Response:
 
 ### 7.1 Save your work
 
-Save your completed `handeye_gripper.py`, `vision.py`, `planners.py`, `key_control.py` and `pick_and_place.py`, your tables and your answers somewhere of your own, then delete your working files from the station PC. Nothing is carried forward, and **Laboratory 4 starts from a fresh repository** — but keep your `ik_solver.py`: the coursework needs it, and it is the same file you kept from Laboratory 2.
+Save your completed `handeye_gripper.py`, `vision.py`, `planners.py`, `key_control.py` and `pick_and_place.py`, your tables and your answers somewhere of your own, then delete your working files from the station PC. Nothing is carried forward, and **Laboratory 4 starts from a fresh repository**.
 
 ### 7.2 Submit your Möbius answers
 
@@ -479,7 +476,7 @@ Check that you have answered all 8 Möbius questions for this lab, then submit. 
 
 [2] Cinosi, N. *Introduction to Robotics*: lecture slides. Decks 11 to 14 (robotic vision, weeks 15 to 18). On Canvas.
 
-[3] Craig, J. J. (2017) *Introduction to Robotics: Mechanics and Control*. 4th edn. Pearson. Chapter 4 (inverse manipulator kinematics) — the convention your `ik_solver.py` uses — and the sections on sensing and end-effectors.
+[3] Craig, J. J. (2017) *Introduction to Robotics: Mechanics and Control*. 4th edn. Pearson. Chapter 4 (inverse manipulator kinematics) — the convention behind `ik_lite6.py`'s solver — and the sections on sensing and end-effectors.
 
 [4] Siciliano, B., Sciavicco, L., Villani, L. and Oriolo, G. (2009) *Robotics: Modelling, Planning and Control*. Springer. Chapter 3 (the pinhole model and calibration) and the trajectory-planning treatment of blending functions behind Section 5.4.
 
@@ -550,7 +547,7 @@ Lectures from Dr Cinosi's timetable for 2026–27. Laboratories run twice, a wee
 | Block side S | 25 mm | `BLOCK_SIDE_MM`, `lab_config.py` |
 | Nominal tool offset (pre-calibration guess) | 75 mm | `TOOL_OFFSET_MM`, `lab_config.py` — Task 1 replaces this with your measured d |
 | Hover stand-off | 50 mm back along the cup axis from the estimate / destination | `HOVER_ABOVE_MM`, `lab_config.py` |
-| Table surface height (base frame) | 12.5 mm | `TABLE_Z_MM`, `lab_config.py` |
+| Table surface height (base frame) | 12.5 mm | `TABLE_Z_MM`, `lab_config.py` — a safety floor (the key-gated jog clamps the tip 2 mm above it) and a plausibility check on CAPTURE 1; not an input to the pose fit |
 | Stack base (base frame xy) | (250, 0) mm | `PLACE_XY_MM`, `lab_config.py` |
 | Key-gated step | 3 mm per press | `KEY_STEP_MM`, `lab_config.py` |
 | Calibration captures (one look + several touches) | 6+ touches | `handeye_gripper.py` |
@@ -576,10 +573,10 @@ What is in the download.
 
 | File | Purpose | Provided or you write |
 |---|---|---|
-| `src/lab_config.py` | Every tunable in one place: sizes, hover heights, HSV defaults, speeds | Provided (defaults may need tuning in Task 2) |
+| `src/lab_config.py` | Every tunable in one place: sizes, hover heights, colour-band defaults, speeds | Provided (defaults may need tuning in Task 2) |
 | `src/fk_lite6.py` | Forward kinematics in the modified DH convention, as you finished it in Laboratory 1 | Provided |
-| `src/ik_solver.py` | The inverse kinematics you completed in Laboratory 2, unchanged | You bring yours |
-| `src/robot_io.py` | Every hardware call, wrapped: connect, joints, servo moves, vacuum | Provided |
+| `src/ik_lite6.py` | Inverse kinematics: the residual-based solver of Laboratory 2, run against your station's calibrated DH parameters | Provided |
+| `src/robot.py` | Every hardware call, wrapped: connect, joints, servo moves, vacuum | Provided |
 | `src/aruco_artifact_detector.py` | ArUco detection and the artifact geometry (`board_config.json`), reworked for this lab's raw board frame | Provided |
 | `src/handeye_gripper.py` | Task 1: the two capture loops and the report are provided; you complete the four maths functions — the top-face centre, the artifact pose in the base, the top-face plane and the per-touch solve | You complete |
 | `src/vision.py` | Tasks 2 and 3: colour masks, blob selection, known-size depth, yaw | You complete |

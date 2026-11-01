@@ -24,8 +24,8 @@ def load_artifact_config(config_path=None):
     corners_m = {int(mid): np.asarray(raw, dtype=np.float64) / 1000.0
                  for mid, raw in zip(marker_ids,
                                      artifact['marker_corners_mm'])}
-    centroid = np.vstack([corners_m[mid] for mid in marker_ids]).mean(axis=0)
-    corners_m = {mid: c - centroid for mid, c in corners_m.items()}
+    # Frame A is the config's own frame: marker 0 (the top face) is centred at
+    # [0, 0, 0], so T_0_A's origin IS the touch point. No re-centring.
     return marker_ids, corners_m
 
 
@@ -88,7 +88,8 @@ class ArucoArtifactDetector:
         T_C_W[:3, 3] = np.asarray(tvec, dtype=float).ravel()
         return {'T_C_W': T_C_W, 'rvec': np.asarray(rvec, dtype=float),
                 'tvec': np.asarray(tvec, dtype=float).ravel(),
-                'reproj_px': reproj_px, 'ids': matched}
+                'reproj_px': reproj_px, 'ids': matched,
+                'object_points': object_points, 'image_points': image_points}
 
     def _solve(self, object_points, image_points):
         """PnP on the pooled points -> (rvec, tvec); (None, None) on failure."""

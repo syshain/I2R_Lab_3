@@ -29,10 +29,18 @@ TABLE_Z_MM = 12.5
 PLACE_XY_MM = (250.0, 0.0)
 KEY_STEP_MM = 3.0
 KEY_SPEED_PCT = 10
+GRIPPER_SETTLE_S = 2.0      # vacuum build-up wait after [SPACE] engages it,
+                            # before any further motion (pick_and_place.py)
+STREAM_TICK_S = 0.02        # servo-stream tick period (s); mode-1 executor
+STREAM_SPEED_MM_S = 40.0    # commanded cup speed while streaming (MM/s)
+STREAM_DESCENT_MM_S = 20.0  # streamed cup speed for contact phases (MM/s)
 MIN_CONFIDENCE = 0.35
 MIN_AREA_PX = 300
 MAX_AREA_FRAC = 0.5
-_RGB_DEFAULTS = {'red': [{'r_lo': 150, 'r_hi': 255, 'g_lo': 0, 'g_hi': 110, 'b_lo': 0, 'b_hi': 110}], 'green': [{'r_lo': 0, 'r_hi': 110, 'g_lo': 120, 'g_hi': 255, 'b_lo': 0, 'b_hi': 110}]}
+# Masks are numbered, not coloured: block 1 / block 2 — any colour of block
+# can be handled by re-tuning the bands at runtime (ui_display.tune_masks).
+# The shipped defaults happen to suit mask 1 = green-ish block, mask 2 = red-ish.
+_RGB_DEFAULTS = {'1': [{'r_lo': 0, 'r_hi': 110, 'g_lo': 120, 'g_hi': 255, 'b_lo': 0, 'b_hi': 110}], '2': [{'r_lo': 150, 'r_hi': 255, 'g_lo': 0, 'g_hi': 110, 'b_lo': 0, 'b_hi': 110}]}
 
 def _clone_defaults():
     """Deep-copy the default RGB bands (so reset restores an independent copy)."""
@@ -53,3 +61,6 @@ DATA_DIR = os.path.join(PROJECT_ROOT, DATA_FOLDER)
 def data_path(filename):
     """Absolute path to a file inside the data folder."""
     return os.path.join(DATA_DIR, filename)
+
+TRAJECTORY_FOLDER = 'trajectories'  # executed-path plots + CSVs land here
+TRAJECTORY_DIR = os.path.join(DATA_DIR, TRAJECTORY_FOLDER)   # (path_recorder.py)

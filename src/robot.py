@@ -11,11 +11,12 @@ import time
 import numpy as np
 from xarm.wrapper import XArmAPI
 
-from lab_config import JOINT_LIMITS_DEG, ROBOT_IP
+from lab_config import JOINT_LIMITS_DEG, ROBOT_IP, STREAM_SPEED_MM_S
 from reporting import progress
 
 SERVO_SPEED = 30
 POSITION_MODE = 0
+SERVO_MOTION_MODE = 1
 
 
 def connect_arm(ip=ROBOT_IP):
@@ -48,6 +49,30 @@ def within_joint_limits(q_deg):
                 and np.all(q_deg <= JOINT_LIMITS_DEG[:, 1]))
 
 
+def set_control_mode(arm, mode):
+    """Switch the control mode (0 position, 1 servo motion) and leave the
+    controller ready. The arm must be stationary. Returns the SDK code."""
+
+    code = arm.set_mode(mode)
+    if code != 0:
+        return code
+    return arm.set_state(0)
+
+
+def stream_flange_pose(arm, mvpose, speed=STREAM_SPEED_MM_S):
+    """Send one servo-cartesian pose in servo motion mode (mode 1).
+
+    mvpose is [x, y, z, wx, wy, wz]: position in MILLIMETRES, orientation as
+    an axis-angle vector in radians (with is_radian=True the SDK passes
+    x/y/z through unconverted — the protocol takes mm). The controller
+    executes only the LAST instruction received, so this must be called at
+    a fixed rate (key_control.streamed_path owns the pacing). speed is in
+    mm/s. Returns the SDK code.
+    """
+
+    return arm.set_servo_cartesian_aa(mvpose, speed=speed, is_radian=True)
+
+
 def move_to_joints(arm, q_target_rad, speed=SERVO_SPEED, wait=True):
     """Drive servos to q_target_rad (radians). wait=True blocks on arrival;."""
 
@@ -67,6 +92,19 @@ HOME_JOINTS_DEG = [0, 0, 20, 0, 0, 0]
 def go_home(arm):
     """Move the arm back to its home position (blocking). Returns (ok, msg)."""
     return move_to_joints(arm, np.deg2rad(HOME_JOINTS_DEG))
+
+
+def disable_arm(arm):
+    """Put the controller into the stopped state (state 4): every motion
+    command is refused until it is re-enabled — in UFactory Studio, or by
+    the next run of this script (set_control_mode issues set_state(0)).
+
+    motion_enable(False) is deliberately NOT used: recovering from it needs
+    motion_enable(True), which knocks the arm out of Manual Mode mid-lab
+    (see Lab 2's robot.py). Returns the SDK code.
+    """
+
+    return arm.set_state(4)
 
 
 def open_gripper(arm):
