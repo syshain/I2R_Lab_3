@@ -416,9 +416,9 @@ def report_and_save(T_0_A, touches, p_top_A, T_6_C, capture):
     if d <= 0:
         progress("WARNING: d is not positive - the tip should sit in FRONT of")
         progress("         the flange along +z. Check the touches and retake.")
-    if d_std_mm > CONSISTENCY_WARN_MM:
+    if d_spread_mm > CONSISTENCY_WARN_MM:
         progress("WARNING: per-touch d spread %.2f mm > %.2f mm - the touches"
-                 % (d_std_mm, CONSISTENCY_WARN_MM))
+                 % (d_spread_mm, CONSISTENCY_WARN_MM))
         progress("         disagree. Check the GRAZE flags and retake outliers.")
     inplane_mm = np.array([t['inplane_mm'] for t in touches])
     if inplane_mm.max() > INPLANE_WARN_MM:

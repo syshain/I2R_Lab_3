@@ -179,9 +179,11 @@ def fit_block_pose(det, K, T_cam):
                    method='Nelder-Mead',
                    options={'xatol': 1e-5, 'fatol': 1e-7, 'maxiter': 600})
     info = {'tilt_deg': tilt_deg, 'fit_loss': float(res.fun),
-            'naive_used': False}
+            'naive_used': False,
+            'z_naive_mm': float(p_naive[2] * 1000.0)}
     if res.fun > _FIT_LOSS_MAX:
         yaw = estimate_block_yaw(det, T_cam)
+        info['naive_used'] = True
         return p_naive, yaw, info
     x, y, z, yaw = res.x
     yaw = float((yaw + np.pi) % (2.0 * np.pi) - np.pi)
@@ -200,6 +202,7 @@ def one_shot_estimate(frame, color, K, dist_coeffs, T_flange, T_ee_cam):
             'depth_mm': float(np.linalg.norm(p_top - T_cam[:3, 3]) * 1000.0),
             'tilt_deg': info['tilt_deg'], 'fit_loss': info['fit_loss'],
             'naive_used': info['naive_used'],
+            'z_naive_mm': info['z_naive_mm'],
             'confidence': det['confidence'], 'center_px': det['center_px'],
             'bbox_px': det['bbox_px'], 'rect': det['rect'],
             'mask': det['mask']}

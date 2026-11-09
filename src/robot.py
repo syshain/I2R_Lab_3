@@ -31,6 +31,9 @@ def connect_arm(ip=ROBOT_IP):
         progress('warning: arm is in motion at connect - holding')
         arm.emergency_stop(30)
         time.sleep(1.0)
+    # Clear the stopped state (4) a previous run leaves behind: without
+    # this, every motion command of the NEXT run is refused.
+    arm.set_state(0)
     return arm
 
 

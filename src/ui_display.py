@@ -6,8 +6,9 @@ import numpy as np
 import cv2
 from lab_config import (AXES_LENGTH_MM, CAMERA_INDEX, CAMERA_MATRIX_NAME,
                         COLOR_THRESHOLDS, DIST_COEFFS_NAME,
-                        GRIPPER_CALIBRATION_NAME, RESULTS_NPY_NAME,
-                        TOOL_OFFSET_MM, _clone_defaults, data_path)
+                        GRIPPER_CALIBRATION_NAME, MASK_BANDS_NAME,
+                        RESULTS_NPY_NAME, TOOL_OFFSET_MM, _clone_defaults,
+                        data_path, save_mask_bands)
 from motion import flange_pose_base
 from so3 import rotation_exp_map
 from units import transform_from_pose_mm_rad
@@ -242,7 +243,7 @@ def show_frame(cap, status_line, info_lines=None, det=None, color='1', hint=None
 
 
 def tune_masks(cap, K, dist_coeffs):
-    """Pre-flight slider calibration: drag until each mask isolates only its."""
+    """Pre-flight slider calibration: drag until each mask isolates its block."""
 
     size_windows()
     create_threshold_trackbars()
@@ -260,6 +261,9 @@ def tune_masks(cap, K, dist_coeffs):
         cv2.imshow(MASK2_WINDOW, draw_debug(masks['2'], 'MASK 2'))
         key = cv2.waitKey(30) & 0xFF
         if key in (13, 10):
+            save_mask_bands()
+            progress('bands accepted and saved to data/%s; future runs start '
+                     'from them' % MASK_BANDS_NAME)
             return True
         if key == ord('r'):
             reset_thresholds()

@@ -9,9 +9,13 @@ lift starts automatically GRIPPER_SETTLE_S after [SPACE] engages the
 vacuum, and the post-seating retreat starts automatically after [SPACE]
 releases it, after which the arm is disabled. Both still abort on [q].
 
-The previous behaviour — one-shot streaming of planned paths and the
-key-gated final tuning jog — is kept below, commented out, so it can be
-restored if needed.
+One run of this script is the whole task: the flights before the descent
+end at an offer ([Enter] to carry on to the descent, [p] to plan another
+path with a fresh profile, executor and vias, [q] to finish the run), and
+the one-shot estimate offers another try ([e]) before it is accepted. [q]
+DURING a pre-descent flight aborts only that flight and returns to the
+offer; once the vacuum has engaged, [q] ends the run (the block is
+released, never dragged).
 """
 
 
@@ -24,19 +28,15 @@ import robot
 # one-shot estimate, print the joints read and the FK tool-tip position so
 # they can be compared with the Studio live readout for the same pose.
 # Set False once the chain is verified.
-ONE_SHOT_DIAG = True
+ONE_SHOT_DIAG = False
 
 from lab_config import (BLOCK_SIDE_MM, DOWN_RPY_DEG, HOVER_ABOVE_MM,
-                        KEY_SPEED_PCT, KEY_STEP_MM, LIFT_CLEAR_MM, STREAM_DESCENT_MM_S,
-                        STREAM_SPEED_MM_S, TABLE_Z_MM)
-# rotation_log_map/solve_ik/move_to_pose/LEGEND/keygate_approach serve only
-# the commented-out one-shot executor and key-gated approach further down;
-# they stay imported so restoring those blocks needs no import edits.
-from ik_lite6 import rotation_log_map, solve_ik
-from key_control import (LEGEND, flange_for_tip, gated_path, streamed_path,
-                         keygate_approach, tip_position)
+                        KEY_SPEED_PCT, KEY_STEP_MM, LIFT_CLEAR_MM, MASK_BANDS_NAME,
+                        STREAM_DESCENT_MM_S, STREAM_SPEED_MM_S, TABLE_Z_MM,
+                        load_mask_bands)
+from key_control import flange_for_tip, gated_path, streamed_path, tip_position
 from path_recorder import PathRecorder, save_path_plots
-from motion import flange_pose_base, move_to_pose
+from motion import flange_pose_base
 from planners import INTERPOLATORS, path_report, plan_via_path
 from reporting import banner, field, heading, progress
 from ui_display import (load_camera_intrinsics, load_calibration_results,
@@ -158,53 +158,13 @@ def transit_to_hover(arm, cap, K, dist, zeta, T_6_C, tool_d_m, q_rad,
     return poses, vias
 
 
-# ---------------------------------------------------------------------------
-# OLD one-shot executor (kept for restore): streams the whole planned path
-# autonomously, with no dead-man switch. To restore the old behaviour,
-# uncomment this block and replace the gated_path calls in do_transfer with
-# execute_path calls.
-# ---------------------------------------------------------------------------
-# def execute_path(arm, zeta, q_rad, poses, label, speed=TRANSIT_SPEED):
-#     """Solve IK along every planned pose BEFORE moving, then stream."""
-#
-#     q_chain = np.asarray(q_rad, dtype=float).copy()
-#     plan = []
-#     for i, T in enumerate(poses):
-#         q_sol, ok, err = solve_ik(T, q_chain, zeta)
-#         if not ok:
-#             T_end = flange_pose_base(q_sol, zeta)
-#             progress("! IK failed at %s pose %d/%d — best it reached was"
-#                      " %.1f mm, %.2f deg off the pose (resid %.2e) — nothing"
-#                      " moved"
-#                      % (label, i + 1, len(poses),
-#                         np.linalg.norm(T_end[:3, 3] - T[:3, 3]) * 1000.0,
-#                         np.degrees(np.linalg.norm(
-#                             rotation_log_map(T_end[:3, :3] @ T[:3, :3].T))),
-#                         err))
-#             return q_rad, True
-#         plan.append(q_sol)
-#         q_chain = q_sol
-#
-#     for q in plan[:-1]:
-#         ok, msg = robot.move_to_joints(arm, q, speed=speed, wait=False)
-#         if not ok:
-#             progress("! streaming rejected: %s" % msg)
-#             return q_rad, True
-#     ok, msg = robot.move_to_joints(arm, plan[-1], speed=speed, wait=True)
-#     if not ok:
-#         progress("! final move rejected: %s" % msg)
-#         return q_rad, True
-#     try:
-#         return robot.read_joints_rad(arm), False
-#     except Exception:
-#         return plan[-1], False
-
-
 # ===========================================================================
 # One transfer: estimate -> transit -> g-gated descent -> actuate
 # ===========================================================================
 def one_shot_gate(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color):
-    """Wait for [Enter], take the one-shot estimate. Retry until seen."""
+    """Wait for [Enter], take the one-shot estimate. [e] takes another
+    estimate in the same run (aim the camera again first); [Enter] on the
+    summary accepts it and the descent starts. Retry until seen."""
 
     while True:
         adv, abrt = wait_next(
@@ -236,6 +196,9 @@ def one_shot_gate(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color):
         heading("ONE-SHOT ESTIMATE (block %s) — record for the report" % color)
         field("position", "x %+7.1f   y %+7.1f   z %+7.1f  mm (top-face centre)"
               % tuple(p * 1000.0))
+        field("z before fit", "%+7.1f mm   (camera ray, before the silhouette fit)"
+              % est['z_naive_mm'])
+        field("fit loss", "%.4f" % est['fit_loss'])
         field("gripper", "lateral (%+.1f, %+.1f) mm, %+7.1f mm along the cup axis"
               % (d_g[0] * 1000.0, d_g[1] * 1000.0, d_g[2] * 1000.0))
         field("yaw", "%+.1f deg   (mod 90 deg for a square face)"
@@ -249,14 +212,27 @@ def one_shot_gate(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color):
         field("image", "centre (%.0f, %.0f) px"
               % tuple(est['center_px']))
         print()
-        return est, False
+        while True:
+            choice = input('[Enter]=descent on this estimate   '
+                           '[e]=estimate again   [q]=abort: ').strip().lower()
+            if choice == '':
+                return est, False
+            if choice == 'e':
+                break
+            if choice == 'q':
+                return None, True
+        continue
 
 
 def do_transfer(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color,
                 dest_block, profile, executor, recorder=None):
     """Full pipeline: pick block `color`, place it on top of `dest_block`.
 
-    executor is 'gated' or 'streamed' (choose_executor). With recorder
+    executor is 'gated' or 'streamed' (choose_executor). Every pre-descent
+    flight ends at an offer (see the module docstring): [Enter] descends,
+    [p] re-asks the profile and executor and flies another path (vias are
+    asked again either way), [q] finishes the run — one run covers Task 3's
+    several estimates and flights. With recorder
     (path_recorder.PathRecorder), each executed segment's tip path is
     recorded and the transit vias are attached to their segment for the
     data/trajectories/ plots.
@@ -293,43 +269,39 @@ def do_transfer(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color,
         return None, True
     p_target = est['p_block_base']
 
-    # The arm was jogged in Manual Mode to aim the camera after the script
-    # read its joints, so the transit MUST be planned from a fresh read:
-    # a stale start pose sends the first planned poses back toward the old
-    # pose — the arm moves away from the block before arcing to the hover.
-    q_rad = robot.read_joints_rad(arm)
-    T_pre = flange_pose_base(q_rad, zeta)     # pose before the one-shot descent;
-                                              # the post-pick lift returns here
+    # Flight loop: Task 3 asks for several estimates and flights inside ONE
+    # run, so every pre-descent transit ends at an offer — [Enter] carries
+    # on to the descent, [p] re-asks the profile and executor and flies
+    # another path, [q] finishes the run. [q] DURING a flight aborts only
+    # that flight and comes back to the offer.
+    while True:
+        # The arm was jogged in Manual Mode to aim the camera after the
+        # script read its joints, so the transit MUST be planned from a
+        # fresh read: a stale start pose sends the first planned poses back
+        # toward the old pose — the arm moves away from the block before
+        # arcing to the hover. T_pre is the pose before the descent: the
+        # post-pick lift returns here.
+        q_rad = robot.read_joints_rad(arm)
+        T_pre = flange_pose_base(q_rad, zeta)
 
-    field("transit", "hover %d mm above the estimate tip, profile '%s'"
-          % (HOVER_ABOVE_MM, profile))
-    poses, _ = transit_to_hover(arm, cap, K, dist, zeta, T_6_C, tool_d_m,
-                                q_rad, p_target, profile, recorder=recorder)
-    q_rad, abrt, _ = execute(q_rad, poses, 'transit', TRANSIT_SPEED)
-    if abrt:
-        return None, True
+        field("transit", "hover %d mm above the estimate tip, profile '%s'"
+              % (HOVER_ABOVE_MM, profile))
+        poses, _ = transit_to_hover(arm, cap, K, dist, zeta, T_6_C, tool_d_m,
+                                    q_rad, p_target, profile,
+                                    recorder=recorder)
+        q_rad, abrt, _ = execute(q_rad, poses, 'transit', TRANSIT_SPEED)
+        # abrt is deliberately not acted on here: [q] mid-flight aborts
+        # only this flight, and the offer below decides what happens next.
 
-    # ------------------------------------------------------------------
-    # OLD key-gated final tuning jog (kept for restore): the student jogged
-    # in KEY_STEP_MM increments until the cup rested on the block, then
-    # confirmed with [SPACE]; the vacuum engaged only after the confirm.
-    # Replaced by the gated descent below.
-    # ------------------------------------------------------------------
-    # R_flange = flange_pose_base(q_rad, zeta)[:3, :3]
-    # print()
-    # heading("FINAL APPROACH — jog until the cup rests on the block")
-    # progress(LEGEND)
-    # confirmed, abrt, q_rad = keygate_approach(
-    #     arm, cap, K, dist, zeta, T_6_C, tool_d_m, R_flange,
-    #     p_target, color, mode='pick', q_rad=q_rad)
-    # if abrt or not confirmed:
-    #     return None, True
-    #
-    # if robot.open_gripper(arm) != 1:
-    #     progress("! vacuum failed to engage — aborting this transfer")
-    #     return None, True
-    # progress("vacuum engaged.")
-    # print()
+        choice = input('Transit flown. [Enter]=descend onto the block   '
+                       '[p]=plan another path   [q]=finish run: ').strip().lower()
+        if choice == '':
+            break
+        if choice == 'p':
+            profile = choose_profile()
+            executor = choose_executor()
+            continue
+        return None, True        # [q] at the offer finishes the run
 
     # Descent onto the block, still under the [g] dead-man switch: the cup
     # tip stops at the estimated top-face centre. [SPACE] engages the
@@ -392,20 +364,6 @@ def do_transfer(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color,
         robot.close_gripper(arm)
         return None, True
 
-    # ------------------------------------------------------------------
-    # OLD key-gated seating jog (kept for restore): see the pick note above.
-    # ------------------------------------------------------------------
-    # R_flange = flange_pose_base(q_rad, zeta)[:3, :3]
-    # print()
-    # heading("SEATING — jog until the block rests on what is below it")
-    # progress(LEGEND)
-    # confirmed, abrt, q_rad = keygate_approach(
-    #     arm, cap, K, dist, zeta, T_6_C, tool_d_m, R_flange,
-    #     p_dest_tip_m, color, mode='place', q_rad=q_rad)
-    # if abrt or not confirmed:
-    #     robot.close_gripper(arm)
-    #     return None, True
-
     # Seating descent, still gated: [SPACE] releases the vacuum once the
     # block rests on what is below it.
     R_flange = flange_pose_base(q_rad, zeta)[:3, :3]
@@ -460,6 +418,11 @@ def run():
     cap = open_camera()
     recorder = PathRecorder()   # executed tip paths -> data/trajectories/
     try:
+        bands = load_mask_bands()
+        if bands == 'saved':
+            progress('colour bands loaded from data/%s (accepted in a '
+                     'previous run); tune_masks [r] still resets to defaults'
+                     % MASK_BANDS_NAME)
         if not tune_masks(cap, K, dist):
             progress("! mask tuning aborted — quitting.")
             return
@@ -471,8 +434,11 @@ def run():
                                   '1', '2', profile, executor,
                                   recorder=recorder)
         if abrt:
+            # [q] at an offer, or an abort mid-transfer: the estimates and
+            # path reports printed so far are still the pair's to record.
             print()
-            progress("! aborted during the transfer — quitting.")
+            progress("Run ended. The one-shot estimates and path reports")
+            progress("printed so far are still yours to record.")
             return
 
         print()

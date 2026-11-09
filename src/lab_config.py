@@ -1,6 +1,7 @@
 """lab_config — every tunable for Lab 3 (colour-block stacking) in one place."""
 
 import copy
+import json
 import os
 
 import numpy as np
@@ -9,10 +10,17 @@ import numpy as np
 ROBOT_IP = os.environ.get('ROBOT_IP', '192.168.1.158')
 CAMERA_INDEX = int(os.environ.get('CAMERA_INDEX', '4'))   # wrist USB camera
 
-# Solver / joint box (Lite 6 mechanical limits, degrees; JOINT LIMITS in the
-# UFACTORY handbook). ik_lite6.py and robot.py both read these.
-JOINT_LIMITS_DEG = np.array([[-360.0, 360.0], [-150.0, 150.0], [-3.5, 300.0],
-                             [-360.0, 360.0], [-124.0, 124.0], [-360.0, 360.0]])
+# Solver / joint box (degrees). These are the bench/controller limits this
+# rig actually enforces, which are narrower than the Lite 6 manual's; Lab 2
+# solved against them too. ik_lite6.py and robot.py both read these.
+JOINT_LIMITS_DEG = np.array([[80.0, 270.0],
+                             [-150.0, 150.0],
+                             [-3.5, 300.0],
+                             [-360.0, 360.0],
+                             [-124.0, 124.0],
+                             [-180.0, 180.0]])
+
+
 IK_FD_EPS_RAD = 1e-5        # centred-difference step for the IK Jacobian, radians
 
 # Block geometry / workflow / detection
@@ -26,7 +34,6 @@ DOWN_RPY_DEG = (0.0, 180.0, 0.0)
 HOVER_ABOVE_MM = 50.0
 LIFT_CLEAR_MM = 80.0
 TABLE_Z_MM = 12.5
-PLACE_XY_MM = (250.0, 0.0)
 KEY_STEP_MM = 3.0
 KEY_SPEED_PCT = 10
 GRIPPER_SETTLE_S = 2.0      # vacuum build-up wait after [SPACE] engages it,
@@ -64,3 +71,28 @@ def data_path(filename):
 
 TRAJECTORY_FOLDER = 'trajectories'  # executed-path plots + CSVs land here
 TRAJECTORY_DIR = os.path.join(DATA_DIR, TRAJECTORY_FOLDER)   # (path_recorder.py)
+
+MASK_BANDS_NAME = 'mask_bands.json'   # accepted colour bands (tune_masks)
+
+
+def load_mask_bands():
+    """Load bands accepted by tune_masks in a previous run into
+    COLOR_THRESHOLDS; returns 'saved' or 'defaults' for the status line."""
+    p = data_path(MASK_BANDS_NAME)
+    if os.path.exists(p):
+        try:
+            with open(p) as f:
+                saved = json.load(f)
+            if set(saved) == set(COLOR_THRESHOLDS):
+                for colour, bands in saved.items():
+                    COLOR_THRESHOLDS[colour] = [dict(b) for b in bands]
+                return 'saved'
+        except (ValueError, OSError):
+            pass
+    return 'defaults'
+
+
+def save_mask_bands():
+    """Write the current COLOR_THRESHOLDS to data/mask_bands.json."""
+    with open(data_path(MASK_BANDS_NAME), 'w') as f:
+        json.dump(COLOR_THRESHOLDS, f, indent=2)

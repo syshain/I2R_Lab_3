@@ -48,8 +48,10 @@ def _fine_plan(poses, q_rad, zeta, label, step_mm):
 
     Both executors share this: the whole path is tracked before anything
     moves, so a plan that cannot be followed aborts with the arm untouched.
-    On IK failure the error is printed and (None, None) is returned;
-    otherwise (fine_poses, plan), with plan[i] the joints for fine_poses[i].
+    On IK failure the error is printed, with how many fine poses were
+    rejected by IK (the failed step and every step after it, which the
+    plan drops), and (None, None) is returned; otherwise (fine_poses,
+    plan), with plan[i] the joints for fine_poses[i].
     """
 
     fine = []
@@ -69,12 +71,12 @@ def _fine_plan(poses, q_rad, zeta, label, step_mm):
             T_end = flange_pose_base(q_sol, zeta)
             progress("! IK failed at %s step %d/%d — best it reached was"
                      " %.1f mm, %.2f deg off the pose (resid %.2e) — nothing"
-                     " moved"
+                     " moved; %d fine pose(s) rejected by IK"
                      % (label, i + 1, len(fine),
                         np.linalg.norm(T_end[:3, 3] - T[:3, 3]) * 1000.0,
                         np.degrees(np.linalg.norm(
                             rotation_log_map(T_end[:3, :3] @ T[:3, :3].T))),
-                        err))
+                        err, len(fine) - i))
             return None, None
         plan.append(q_sol)
         q_chain = q_sol
@@ -117,7 +119,10 @@ def gated_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
 
     aborted = done = False
     i = 0
-    while i < len(plan) and not aborted and not done:
+    # Like the streamed executor, the phase stays open after the last
+    # step when [SPACE] is live, so the toggle is never raced by the end
+    # of the plan.
+    while not aborted and not done and (i < len(plan) or allow_gripper):
         T_flange = flange_pose_base(q_rad, zeta)
         p_tip = tip_position(T_flange, tool_d_m)
         T_cam = T_flange @ T_ee_cam
@@ -276,8 +281,11 @@ def streamed_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
     thread.start()
 
     aborted = False
-    while state['run'] and state['i'] < len(plan) and not aborted \
-            and not state['done']:
+    # The phase stays open after the last tick when [SPACE] is live: the
+    # cup reaches the block on the final tick, and ending the loop on
+    # plan completion would race the [SPACE] keypress and lose it.
+    while state['run'] and not aborted and not state['done'] \
+            and (state['i'] < len(plan) or allow_gripper):
         T_flange = flange_pose_base(q_rad, zeta)
         p_tip = tip_position(T_flange, tool_d_m)
         T_cam = T_flange @ T_ee_cam
@@ -343,6 +351,12 @@ def streamed_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
     time.sleep(0.2)          # let the last ticks reach the controller
     if state['error']:
         progress('! %s' % state['error'])
+        try:
+            progress('controller: state %s, mode %s, error %s, warn %s'
+                     % (arm.state, arm.mode, arm.error_code,
+                        arm.warn_code))
+        except Exception:
+            progress('controller status unreadable')
         aborted = True
     try:
         q_rad = robot.read_joints_rad(arm)

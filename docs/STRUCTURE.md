@@ -73,7 +73,7 @@ modules. Any leaf module can be read in isolation.
 | `calibration_results.npy` | Calibrated DH `zeta_stage2` + hand-eye `T_6_C` fitted WITH it (Lab 2). The pair must go into FK/IK together. |
 | `gripper_calibration.npy` | Stage-1 tool offset (flange→cup distance) from `handeye_gripper.py`. |
 | `aruco_config.json` | ArUco artifact definition for `aruco_artifact_detector.py`. |
-| `calibration_data.npy`, `capture_log.json` | Stored calibration captures and their log. |
+| `capture_log.json` | Log of the stored calibration captures. |
 
 ## How to run
 

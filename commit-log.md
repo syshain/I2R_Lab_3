@@ -46,3 +46,9 @@ Working lab 3 code
 - PathRecorder saves executed-path 3D plots + CSV; console vias overlayed as larger dots
 - Linear interpolation made the default profile
 - New streamed executor (servo mode 1, jolt-free) alongside the keygated position-mode one, selectable at start; both share the dead-man gate
+
+# v7 - One run per task; IK rejection count
+9 Nov 2026
+- One run of pick_and_place.py covers the whole task: every pre-descent transit ends at an offer — [Enter] descends, [p] re-asks profile and executor and plans another path, [q] finishes the run; [q] mid-flight aborts only that flight and returns to the offer
+- _fine_plan reports how many fine poses IK rejected on a failed plan (feeds the handout's "poses rejected by IK" table row)
+- Commented-out execute_path and key-gated jog blocks deleted with their now-unused imports; ONE_SHOT_DIAG off in the GTA copy; disable_arm only at the end of a run, never on a phase abort
