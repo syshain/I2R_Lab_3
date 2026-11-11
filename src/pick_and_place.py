@@ -445,7 +445,7 @@ def run():
         progress("Transfer complete. Record both one-shot estimates, the")
         progress("seat height and the path reports for the handout.")
     finally:
-        save_path_plots(recorder)
+        save_path_plots(recorder, robot_sn=robot.robot_sn(arm))
         robot.stop_gripper(arm)
         robot.disable_arm(arm)
         cap.release()
