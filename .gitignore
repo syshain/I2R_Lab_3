@@ -1,5 +1,6 @@
 *.venv
 *.png
+*.pdf
 *.jpg
 __*__
 *.MOV

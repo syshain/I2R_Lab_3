@@ -62,5 +62,14 @@ Working lab 3 code
 ## 12 Nov 2026
 - Camera/calibration loads from previous labs guarded with a "copy your Lab N files into data/" message (both trees)
 
+# v10 - Wrist flip guard, cup tip protection and STRUCTURE.md update
+## 12 Nov 2026
+- Wrist-flip guard: _fine_plan rejects the whole move when any joint jumps more than IK_JUMP_DEG (10 deg) between consecutive fine steps
+- Descent/seating z-floor now protects the cup tip (flange floor raised by the tool offset), not the flange
+- Seating readout measures against the destination block (dest_block), not the carried block
+- PathRecorder buffers vias prompted before their segment opens, so they reach the saved plot
+- CAMERA_INDEX default 4 to 0; JOINT_LIMITS_DEG default J1 set to the bench limits 80..270
+- docs/STRUCTURE.md updated to current behaviour (executors, wrist-flip guard, data/trajectories, mask_bands.json)
+
 
 
