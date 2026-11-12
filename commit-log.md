@@ -48,14 +48,19 @@ Working lab 3 code
 - New streamed executor (servo mode 1, jolt-free) alongside the keygated position-mode one, selectable at start; both share the dead-man gate
 
 # v7 - One run per task; IK rejection count
-9 Nov 2026
+## 9 Nov 2026
 - One run of pick_and_place.py covers the whole task: every pre-descent transit ends at an offer — [Enter] descends, [p] re-asks profile and executor and plans another path, [q] finishes the run; [q] mid-flight aborts only that flight and returns to the offer
 - _fine_plan reports how many fine poses IK rejected on a failed plan (feeds the handout's "poses rejected by IK" table row)
 - Commented-out execute_path and key-gated jog blocks deleted with their now-unused imports; ONE_SHOT_DIAG off in the GTA copy; disable_arm only at the end of a run, never on a phase abort
 
 # v8 - Streamed mode fix and robot serial number recording
-11 Nov 2026
+## 11 Nov 2026
 - Streamed mode fix added to reduce jolting at the start. 
 - Robot serial number recorded by all robot-interfacing programs for hardware uniqueness
+
+# v9 - Loader guards, NotImplementedError stubs
+## 12 Nov 2026
+- Camera/calibration loads from previous labs guarded with a "copy your Lab N files into data/" message (both trees)
+
 
 
