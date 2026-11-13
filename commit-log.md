@@ -71,5 +71,8 @@ Working lab 3 code
 - CAMERA_INDEX default 4 to 0; JOINT_LIMITS_DEG default J1 set to the bench limits 80..270
 - docs/STRUCTURE.md updated to current behaviour (executors, wrist-flip guard, data/trajectories, mask_bands.json)
 
-
-
+## v10.1 - Minor fixes
+## 13 Nov 2026
+- PathRecorder: vias always held until the next transit starts, so later flights label their own vias (not "lift"/"retreat")
+- Wrist-flip guard: first fine step compared against the arm's current joints; jump measured modulo 2pi so the +/-180 deg wrap is not read as a flip
+- handeye_gripper: touch spread uses sample std (ddof=1), matching the reference copy

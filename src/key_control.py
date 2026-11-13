@@ -83,14 +83,17 @@ def _fine_plan(poses, q_rad, zeta, label, step_mm):
                             rotation_log_map(T_end[:3, :3] @ T[:3, :3].T))),
                         err, len(fine) - i))
             return None, None
-        if plan:
-            jump_deg = float(np.max(np.abs(np.degrees(q_sol - plan[-1]))))
-            if jump_deg > IK_JUMP_DEG:
-                progress("! joint jump %.1f deg at %s step %d/%d (wrist flip)"
-                         " — move rejected, nothing moved; %d fine pose(s)"
-                         " rejected"
-                         % (jump_deg, label, i + 1, len(fine), len(fine) - i))
-                return None, None
+        # Joint angles wrap at +/-180 deg: compare modulo 2*pi so an
+        # equivalent solution on the other side of the wrap is not read
+        # as a flip.
+        jump_deg = float(np.max(np.abs(
+            np.degrees((q_sol - q_chain + np.pi) % (2.0 * np.pi) - np.pi))))
+        if jump_deg > IK_JUMP_DEG:
+            progress("! joint jump %.1f deg at %s step %d/%d (wrist flip)"
+                     " — move rejected, nothing moved; %d fine pose(s)"
+                     " rejected"
+                     % (jump_deg, label, i + 1, len(fine), len(fine) - i))
+            return None, None
         plan.append(q_sol)
         q_chain = q_sol
     return fine, plan

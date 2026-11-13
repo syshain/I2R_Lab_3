@@ -39,14 +39,11 @@ class PathRecorder:
     def add_via(self, p_tip_m):
         """Record a console-entered via point (m, base frame).
 
-        Vias are prompted before the transit segment opens, so they wait
-        in _pending_vias until the next start_segment() claims them.
+        Vias are always held until the next start_segment() claims them,
+        so a via prompted between phases lands on the transit it belongs
+        to, not on the segment still open from the step before.
         """
-        p = np.asarray(p_tip_m, dtype=float) * 1000.0
-        if self._current is not None:
-            self._current['vias_mm'].append(p)
-        else:
-            self._pending_vias.append(p)
+        self._pending_vias.append(np.asarray(p_tip_m, dtype=float) * 1000.0)
 
     def has_data(self):
         return any(len(s['points_mm']) >= 1 for s in self.segments)
