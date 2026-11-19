@@ -31,7 +31,8 @@ import robot
 ONE_SHOT_DIAG = False
 
 from lab_config import (BLOCK_SIDE_MM, DOWN_RPY_DEG, HOVER_ABOVE_MM,
-                        KEY_SPEED_PCT, KEY_STEP_MM, LIFT_CLEAR_MM, MASK_BANDS_NAME,
+                        JOINT_LIMITS_DEG, KEY_SPEED_PCT, KEY_STEP_MM,
+                        LIFT_CLEAR_MM, MASK_BANDS_NAME,
                         STREAM_DESCENT_MM_S, STREAM_SPEED_MM_S, TABLE_Z_MM,
                         load_mask_bands)
 from key_control import flange_for_tip, gated_path, streamed_path, tip_position
@@ -174,6 +175,15 @@ def one_shot_gate(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color):
             return None, True
         ret, frame = cap.read()
         q_rad = robot.read_joints_rad(arm)
+        q_deg = np.degrees(q_rad)
+        outside = [(j + 1, lo, hi) for j, (lo, hi) in enumerate(JOINT_LIMITS_DEG)
+                   if not lo <= q_deg[j] <= hi]
+        if outside:
+            progress('! arm outside the lab joint box: ' + ', '.join(
+                'J%d at %+.0f deg (allowed %.0f to %.0f)'
+                % (j, q_deg[j - 1], lo, hi) for j, lo, hi in outside))
+            progress('  move it back inside in UFactory Studio (Manual Mode);'
+                     ' the transit cannot be planned from here')
         T_flange = flange_pose_base(q_rad, zeta)
         if ONE_SHOT_DIAG:
             progress("[diag] joints read (deg): %s"

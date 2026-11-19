@@ -11,7 +11,7 @@ import time
 import numpy as np
 from xarm.wrapper import XArmAPI
 
-from lab_config import JOINT_LIMITS_DEG, ROBOT_IP, STREAM_SPEED_MM_S
+from lab_config import JOINT_LIMITS_DEG, ROBOT_IP
 from reporting import progress
 
 SERVO_SPEED = 30
@@ -59,23 +59,6 @@ def read_joints_rad(arm):
     return np.deg2rad(np.asarray(angles_deg[:6], dtype=float))
 
 
-def read_flange_pose_aa(arm):
-    """The flange pose as the CONTROLLER reports it, in the servo wire format.
-
-    Returns [x, y, z] in millimetres + [wx, wy, wz] as an axis-angle vector
-    in radians — exactly what stream_flange_pose takes. Used to prime the
-    servo stream: sending the controller's own pose once before the first
-    planned tick makes that tick a genuine small step from where the
-    controller really is, instead of a max-speed dash from wherever it
-    disagrees with our forward kinematics.
-    """
-
-    code, pose = arm.get_position_aa(is_radian=True)
-    if code != 0:
-        raise RuntimeError('flange pose read failed (code %d)' % code)
-    return [float(v) for v in pose[:6]]
-
-
 def within_joint_limits(q_deg):
     """True if a (6,) degree vector is inside the Lite 6 joint limits."""
     q_deg = np.asarray(q_deg, dtype=float)
@@ -93,18 +76,17 @@ def set_control_mode(arm, mode):
     return arm.set_state(0)
 
 
-def stream_flange_pose(arm, mvpose, speed=STREAM_SPEED_MM_S):
-    """Send one servo-cartesian pose in servo motion mode (mode 1).
+def stream_joints(arm, q_rad):
+    """Send one servo-joint target in servo motion mode (mode 1).
 
-    mvpose is [x, y, z, wx, wy, wz]: position in MILLIMETRES, orientation as
-    an axis-angle vector in radians (with is_radian=True the SDK passes
-    x/y/z through unconverted — the protocol takes mm). The controller
-    executes only the LAST instruction received, so this must be called at
-    a fixed rate (key_control.streamed_path owns the pacing). speed is in
-    mm/s. Returns the SDK code.
+    q_rad is the six joint angles in radians. Like the Cartesian servo
+    command, the controller executes only the LAST instruction received,
+    so this must be called at a fixed rate (key_control.streamed_path owns
+    the pacing). Returns the SDK code.
     """
 
-    return arm.set_servo_cartesian_aa(mvpose, speed=speed, is_radian=True)
+    return arm.set_servo_angle_j(np.asarray(q_rad, dtype=float).tolist(),
+                                 is_radian=True)
 
 
 def move_to_joints(arm, q_target_rad, speed=SERVO_SPEED, wait=True):

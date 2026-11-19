@@ -76,3 +76,11 @@ Working lab 3 code
 - PathRecorder: vias always held until the next transit starts, so later flights label their own vias (not "lift"/"retreat")
 - Wrist-flip guard: first fine step compared against the arm's current joints; jump measured modulo 2pi so the +/-180 deg wrap is not read as a flip
 - handeye_gripper: touch spread uses sample std (ddof=1), matching the reference copy
+
+# v10.2 - Ferdinando's fix list (L13-L16)
+## 19 Nov 2026
+- gated_path: a held-[g] frame after the last step no longer indexes past the plan (crashed the gripper phases, whose loop stays open for [SPACE])
+- Streamed executor streams joint targets (set_servo_angle_j) instead of Cartesian poses; priming sends the controller's own joint readout, which removes the start-of-run jolt (bench run still to confirm)
+- Artefact frame renamed A -> W to match the handout: T_0_A/T_G_A are now T_0_W/T_G_W in handeye_gripper.py, its console output and gripper_calibration.npy keys
+- one_shot_gate: warns which joints sit outside JOINT_LIMITS_DEG and what to do, instead of a cryptic "IK failed at transit step 1"
+- Wrist-flip guard: jump now measured as the raw joint difference, NOT modulo 360 (reverses the v10.1 reading); a near-full turn such as J6 +179 -> -179 is no longer waved through as a 2-degree step

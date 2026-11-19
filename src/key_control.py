@@ -83,11 +83,11 @@ def _fine_plan(poses, q_rad, zeta, label, step_mm):
                             rotation_log_map(T_end[:3, :3] @ T[:3, :3].T))),
                         err, len(fine) - i))
             return None, None
-        # Joint angles wrap at +/-180 deg: compare modulo 2*pi so an
-        # equivalent solution on the other side of the wrap is not read
-        # as a flip.
-        jump_deg = float(np.max(np.abs(
-            np.degrees((q_sol - q_chain + np.pi) % (2.0 * np.pi) - np.pi))))
+        # Raw difference, deliberately NOT modulo 360: two commands one
+        # full turn apart are different physical motions, and the wrap-
+        # equivalent reading would wave a near-full revolution (J6 from
+        # +179 to -179) through as a 2-degree step.
+        jump_deg = float(np.max(np.abs(np.degrees(q_sol - q_chain))))
         if jump_deg > IK_JUMP_DEG:
             progress("! joint jump %.1f deg at %s step %d/%d (wrist flip)"
                      " — move rejected, nothing moved; %d fine pose(s)"
@@ -197,7 +197,7 @@ def gated_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
                     done = True
                 else:
                     progress('! vacuum failed to engage')
-        elif auto or key == HOLD_KEY:      # auto phase, or held down -> step
+        elif (auto or key == HOLD_KEY) and i < len(plan):      # auto, or held down -> step
             ok_mv, msg = robot.move_to_joints(arm, plan[i], speed=speed,
                                               wait=True)
             if ok_mv:
@@ -222,10 +222,10 @@ def streamed_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
     The plan is subdivided into ticks of speed*STREAM_TICK_S mm and their IK
     solved BEFORE anything moves (same pre-solve guarantee as gated_path).
     The arm is switched to servo motion mode (mode 1) and a fixed-rate thread
-    streams one tick pose per STREAM_TICK_S via set_servo_cartesian_aa; the
+    streams one tick's joint solution per STREAM_TICK_S via set_servo_angle_j; the
     controller blends consecutive targets into continuous motion, so there is
     no rest-to-rest trapezoid per step and hence no jolt. The stream is
-    primed before the first planned tick (the controller's own pose is
+    primed before the first planned tick (the controller's own joint readout is
     sent once: servo commands move at the controller's maximum speed with
     no ramp, so tick 1 must start from where the controller really is),
     and after the last planned tick the stream keeps re-sending the final
@@ -271,25 +271,22 @@ def streamed_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
     state = {'i': 0, 'held': auto, 'run': True, 'error': None, 'done': False,
              'drained': False}
 
-    def _mvpose(T):
-        """Wire format for set_servo_cartesian_aa: [x y z] mm + axis-angle rad."""
-        return [T[0, 3] * 1000.0, T[1, 3] * 1000.0, T[2, 3] * 1000.0] \
-            + list(rotation_log_map(T[:3, :3]))
-
-    # Prime the stream: send the pose the CONTROLLER is actually at before
-    # the first planned tick. Servo commands have no speed ramp (the SDK's
-    # speed argument is reserved; the controller dashes to each new target
-    # at full speed), so without this the first tick is a max-speed dash
-    # from wherever the controller sits relative to our forward
-    # kinematics — the jolt at the start of every streamed phase.
+    # Prime the stream: send the JOINTS the controller is actually at
+    # before the first planned tick. Servo commands have no speed ramp (the
+    # SDK's speed argument is reserved; the controller dashes to each new
+    # target at full speed), so without this the first tick is a max-speed
+    # dash from wherever the controller sits — the jolt at the start of
+    # every streamed phase. Joint targets prime exactly: the readout IS the
+    # wire format, so there is no FK-vs-controller disagreement to dash
+    # across, which is what removes the jolt the pose stream only dampened.
     try:
-        prime = robot.read_flange_pose_aa(arm)
+        prime = robot.read_joints_rad(arm)
     except Exception as exc:
-        progress('! could not read the flange pose to prime the stream (%s)'
+        progress('! could not read the joints to prime the stream (%s)'
                  ' — leaving servo mode' % exc)
         robot.set_control_mode(arm, robot.POSITION_MODE)
         return q_rad, True, gripping
-    if robot.stream_flange_pose(arm, prime, speed=speed) != 0:
+    if robot.stream_joints(arm, prime) != 0:
         progress('! priming tick rejected — leaving servo mode')
         robot.set_control_mode(arm, robot.POSITION_MODE)
         return q_rad, True, gripping
@@ -303,8 +300,7 @@ def streamed_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
                 with arm_lock:
                     if not state['run']:
                         break
-                    code = robot.stream_flange_pose(
-                        arm, _mvpose(fine[state['i']]), speed=speed)
+                    code = robot.stream_joints(arm, plan[state['i']])
                 if code == 0:
                     if recorder is not None:
                         recorder.add_tip(tip_position(fine[state['i']],
@@ -331,8 +327,7 @@ def streamed_path(arm, cap, K, dist_coeffs, zeta, T_ee_cam, tool_d_m, q_rad,
                 with arm_lock:
                     if not state['run']:
                         break
-                    code = robot.stream_flange_pose(
-                        arm, _mvpose(fine[-1]), speed=speed)
+                    code = robot.stream_joints(arm, plan[-1])
                 if code != 0:
                     state['error'] = ('drain tick rejected at %d/%d '
                                       '(SDK code %d)'
