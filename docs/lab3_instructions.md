@@ -83,7 +83,7 @@ touch spread above 5 mm means the touches disagree — remove the outliers and r
 fitted d more than 20 mm away from the nominal 75 mm usually means a bad CAPTURE 1.
 
 Record: the fitted tool offset d (mm), the per-touch d values and their spread, the
-T_G_C translation, and the T_G_A translation. The file `gripper_calibration.npy` is
+T_G_C translation, and the T_G_W translation. The file `gripper_calibration.npy` is
 written to `data/`; every later stage loads the tool offset from it.
 
 ## 3. The pick-and-place run (robot + camera)

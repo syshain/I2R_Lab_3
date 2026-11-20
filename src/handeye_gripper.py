@@ -63,16 +63,16 @@ def artifact_pose_in_base(q_rad, zeta, T_6_C, T_C_W):
 def top_face_plane(T_0_W, marker_world, marker_id=TOP_MARKER_ID):
     """The top face as a PLANE in the base frame: (n, p_face), both (m)."""
 
-    corners_A = marker_world[marker_id]
-    p_face_A = corners_A.mean(axis=0)   # [0, 0, 0]: frame A's origin is the face centre
-    d1 = corners_A[2] - corners_A[0]
-    d2 = corners_A[3] - corners_A[1]
-    n_A = np.cross(d1, d2)
-    n_A /= np.linalg.norm(n_A)
+    corners_W = marker_world[marker_id]
+    p_face_W = corners_W.mean(axis=0)   # [0, 0, 0]: frame W's origin is the face centre
+    d1 = corners_W[2] - corners_W[0]
+    d2 = corners_W[3] - corners_W[1]
+    n_W = np.cross(d1, d2)
+    n_W /= np.linalg.norm(n_W)
     # n's sign is arbitrary: the touch solve uses the plane equation n.x = n.p_face
     # and the graze check uses |n.z|, both invariant to flipping n.
     R, t = T_0_W[:3, :3], T_0_W[:3, 3]
-    return R @ n_A, R @ p_face_A + t
+    return R @ n_W, R @ p_face_W + t
 
 
 def touch_d_estimate(T_0_6, n, p_face):
@@ -123,7 +123,7 @@ def _show_frozen(frame, status_line, info_lines, hint, marks, axes=None):
     return cv2.waitKey(0) & 0xFF
 
 
-def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
+def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_W):
     """CAPTURE 1: camera looks at the stationary artifact -> (T_0_W, capture).
 
     Several captures can be taken ([SPACE] each; move the wrist between them
@@ -240,7 +240,7 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
         rv_cap, _ = cv2.Rodrigues(capture[1][:3, :3])
         axes_cap = (rv_cap, capture[1][:3, 3].reshape(3, 1),
                     detector.K, detector.dist)
-        uv = project_base_to_uv((T_0_W @ np.hstack([p_top_A, 1.0]))[:3],
+        uv = project_base_to_uv((T_0_W @ np.hstack([p_top_W, 1.0]))[:3],
                                 T_0_6 @ T_6_C, detector.K, detector.dist)
         marks = []
         if uv is not None:
@@ -253,11 +253,11 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
         # both - a bad PnP depth (wrong camera resolution, oblique view)
         # pushes the face along the camera ray. Warn before accept so a bad
         # capture is retaken, never saved.
-        p_A = T_0_W[:3, 3]
-        d_flange_mm = np.linalg.norm(p_A - T_0_6[:3, 3]) * 1000.0
-        if p_A[2] * 1000.0 < TABLE_Z_MM:
+        p_W = T_0_W[:3, 3]
+        d_flange_mm = np.linalg.norm(p_W - T_0_6[:3, 3]) * 1000.0
+        if p_W[2] * 1000.0 < TABLE_Z_MM:
             frozen_info.insert(1, "WARNING: face BELOW the table (z %.1f mm) -"
-                                  % (p_A[2] * 1000.0))
+                                  % (p_W[2] * 1000.0))
             frozen_info.insert(2, "capture is bad: [r] retake, camera closer/frontal")
         elif d_flange_mm > 1500.0:
             frozen_info.insert(1, "WARNING: face %.0f mm from the flange -"
@@ -269,7 +269,7 @@ def capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A):
                 frozen_info, "[SPACE]=accept   [r]=retake   [q]=abort", marks,
                 axes=axes_cap)
             if k in (KEY_CAPTURE, KEY_SAVE):
-                p_claim = (T_0_W @ np.hstack([p_top_A, 1.0]))[:3]
+                p_claim = (T_0_W @ np.hstack([p_top_W, 1.0]))[:3]
                 caps.append({'T_0_W': T_0_W, 'capture': capture,
                              'p_claim': p_claim, 'n_markers': len(det['ids'])})
                 if len(caps) == 1:
@@ -313,7 +313,7 @@ def _touch_panel(info_lines, hint):
     return cv2.waitKey(30) & 0xFF
 
 
-def capture_touch(arm, zeta, T_0_W, p_top_A, n, p_face):
+def capture_touch(arm, zeta, T_0_W, p_top_W, n, p_face):
     """CAPTURE 2: several touches on the top face -> list of touch records or None."""
 
     touches = []
@@ -346,12 +346,12 @@ def capture_touch(arm, zeta, T_0_W, p_top_A, n, p_face):
         if key == KEY_CAPTURE:
             d_i, n_z = touch_d_estimate(T_0_6, n, p_face)
             z = T_0_6[:3, :3] @ np.array([0.0, 0.0, 1.0])
-            p_contact_A = (np.linalg.inv(T_0_W) @
+            p_contact_W = (np.linalg.inv(T_0_W) @
                            np.hstack([T_0_6[:3, 3] + d_i * z, 1.0]))[:3]
             touch = {
                 'q_rad': q_rad.copy(), 'T_0_6': T_0_6,
                 'd_mm': d_i * 1000.0, 'tilt_deg': tilt,
-                'inplane_mm': float(np.linalg.norm(p_contact_A - p_top_A) * 1000.0),
+                'inplane_mm': float(np.linalg.norm(p_contact_W - p_top_W) * 1000.0),
                 'graze': abs(n_z) < GRAZE_COS,
             }
             touches.append(touch)
@@ -381,7 +381,7 @@ def capture_touch(arm, zeta, T_0_W, p_top_A, n, p_face):
             return None
 
 
-def report_and_save(T_0_W, touches, p_top_A, T_6_C, capture, robot_sn='not recorded'):
+def report_and_save(T_0_W, touches, p_top_W, T_6_C, capture, robot_sn='not recorded'):
     """Solve d from the touches, build T_6_G and T_G_C, print the student-record."""
 
     d_mm = np.array([t['d_mm'] for t in touches])
@@ -443,7 +443,7 @@ def report_and_save(T_0_W, touches, p_top_A, T_6_C, capture, robot_sn='not recor
         'T_G_W': T_G_W,
         'tool_offset_mm': d * 1000.0,
         'T_0_W': T_0_W,
-        'top_point_artifact_mm': p_top_A * 1000.0,
+        'top_point_artifact_mm': p_top_W * 1000.0,
         'touch_q_rad': np.array([t['q_rad'] for t in touches]),
         'touch_d_mm': d_mm,
         'touch_tilt_deg': np.array([t['tilt_deg'] for t in touches]),
@@ -486,9 +486,9 @@ def main():
         K, dist_coeffs = load_camera_intrinsics()
         zeta, T_6_C = load_calibration_results()
         detector = aruco_artifact_detector.ArucoArtifactDetector(K, dist_coeffs)
-        p_top_A = top_face_centre(detector.marker_world)
+        p_top_W = top_face_centre(detector.marker_world)
 
-        capture = capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_A)
+        capture = capture_artifact_pose(arm, cap, detector, zeta, T_6_C, p_top_W)
         if capture is None:
             progress("Aborted - nothing saved.")
             return
@@ -499,12 +499,12 @@ def main():
         progress("Now move the arm manually and touch the artifact's TOP face")
         progress("several times - any point on the face, any wrist tilt.")
         print()
-        touches = capture_touch(arm, zeta, T_0_W, p_top_A, n, p_face)
+        touches = capture_touch(arm, zeta, T_0_W, p_top_W, n, p_face)
         if touches is None:
             progress("Aborted - nothing saved.")
             return
 
-        report_and_save(T_0_W, touches, p_top_A, T_6_C, capture,
+        report_and_save(T_0_W, touches, p_top_W, T_6_C, capture,
                         robot_sn=robot.robot_sn(arm))
     finally:
         cap.release()

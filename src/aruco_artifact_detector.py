@@ -24,7 +24,7 @@ def load_artifact_config(config_path=None):
     corners_m = {int(mid): np.asarray(raw, dtype=np.float64) / 1000.0
                  for mid, raw in zip(marker_ids,
                                      artifact['marker_corners_mm'])}
-    # Frame A is the config's own frame: marker 0 (the top face) is centred at
+    # Frame W is the config's own frame: marker 0 (the top face) is centred at
     # [0, 0, 0], so T_0_W's origin IS the touch point. No re-centring.
     return marker_ids, corners_m
 

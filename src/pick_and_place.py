@@ -182,8 +182,8 @@ def one_shot_gate(arm, cap, K, dist, zeta, T_6_C, tool_d_m, color):
             progress('! arm outside the lab joint box: ' + ', '.join(
                 'J%d at %+.0f deg (allowed %.0f to %.0f)'
                 % (j, q_deg[j - 1], lo, hi) for j, lo, hi in outside))
-            progress('  move it back inside in UFactory Studio (Manual Mode);'
-                     ' the transit cannot be planned from here')
+            progress('  press Initial Position in UFactory Studio (it drives the'
+                     ' arm back to the parked pose inside the limits) and try again')
         T_flange = flange_pose_base(q_rad, zeta)
         if ONE_SHOT_DIAG:
             progress("[diag] joints read (deg): %s"

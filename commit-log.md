@@ -84,3 +84,10 @@ Working lab 3 code
 - Artefact frame renamed A -> W to match the handout: T_0_A/T_G_A are now T_0_W/T_G_W in handeye_gripper.py, its console output and gripper_calibration.npy keys
 - one_shot_gate: warns which joints sit outside JOINT_LIMITS_DEG and what to do, instead of a cryptic "IK failed at transit step 1"
 - Wrist-flip guard: jump now measured as the raw joint difference, NOT modulo 360 (reverses the v10.1 reading); a near-full turn such as J6 +179 -> -179 is no longer waved through as a 2-degree step
+
+
+# v10.3 - Ferdinando's follow-ups
+## 20 Nov 2026
+- one_shot_gate: the joint-box warning now says to press Initial Position in UFactory Studio and try again, as the handout does (it was Manual Mode)
+- handeye_gripper: the remaining A names renamed to W (corners_W, p_face_W, n_W, p_top_W, p_contact_W, p_W), plus the "Frame W" comment in aruco_artifact_detector.py
+- lab3_instructions.md: T_G_A -> T_G_W
