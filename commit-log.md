@@ -77,7 +77,7 @@ Working lab 3 code
 - Wrist-flip guard: first fine step compared against the arm's current joints; jump measured modulo 2pi so the +/-180 deg wrap is not read as a flip
 - handeye_gripper: touch spread uses sample std (ddof=1), matching the reference copy
 
-# v10.2 - Ferdinando's fix list (L13-L16)
+# v10.2 - Ferdinando's fix list 
 ## 19 Nov 2026
 - gated_path: a held-[g] frame after the last step no longer indexes past the plan (crashed the gripper phases, whose loop stays open for [SPACE])
 - Streamed executor streams joint targets (set_servo_angle_j) instead of Cartesian poses; priming sends the controller's own joint readout, which removes the start-of-run jolt (bench run still to confirm)
